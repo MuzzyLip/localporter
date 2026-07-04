@@ -1,26 +1,11 @@
-use eframe::egui;
-
-#[derive(Default)]
-struct LocalPorterApp;
-
-impl eframe::App for LocalPorterApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(48.0);
-                ui.heading("Hello, LocalPorter!");
-                ui.label("egui hello-world is running.");
-            });
-        });
-    }
-}
+use localporter_ui::{APP_NAME, StandaloneApp, standalone_native_options};
 
 fn main() -> Result<(), eframe::Error> {
-    let options = eframe::NativeOptions::default();
+    let options = standalone_native_options();
 
     eframe::run_native(
-        "LocalPorter",
+        APP_NAME,
         options,
-        Box::new(|_cc| Ok(Box::<LocalPorterApp>::default())),
+        Box::new(|_cc| Ok(Box::<StandaloneApp>::default())),
     )
 }

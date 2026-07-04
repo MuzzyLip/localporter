@@ -1,8 +1,7 @@
 [package]
-name = "localporter-app"
+name = "localporter-ui"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 eframe.workspace = true
-localporter-ui.workspace = true

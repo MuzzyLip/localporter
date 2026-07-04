@@ -1746,6 +1746,14 @@ name = "localporter-app"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "localporter-ui",
+]
+
+[[package]]
+name = "localporter-ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
 ]
 
 [[package]]
