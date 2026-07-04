@@ -1,0 +1,4 @@
+[package]
+name = "localporter-core"
+version.workspace = true
+edition.workspace = true

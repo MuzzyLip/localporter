@@ -6,6 +6,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|_cc| Ok(Box::<StandaloneApp>::default())),
+        Box::new(|cc| Ok(Box::new(StandaloneApp::new(cc)))),
     )
 }
