@@ -29,19 +29,6 @@ impl ProcessSummary {
         self.ports.len().saturating_sub(1)
     }
 
-    pub fn primary_port_text(&self) -> String {
-        let Some(primary_port) = self.primary_port() else {
-            return "Unknown".to_owned();
-        };
-
-        let remaining_count = self.remaining_port_count();
-        if remaining_count == 0 {
-            format!(":{}", primary_port.port)
-        } else {
-            format!(":{} +{remaining_count}", primary_port.port)
-        }
-    }
-
     pub fn tcp_ports(&self) -> Vec<u16> {
         self.ports
             .iter()
@@ -77,27 +64,32 @@ mod tests {
     }
 
     #[test]
-    fn primary_port_text_returns_unknown_when_no_ports_exist() {
+    fn primary_port_returns_none_when_no_ports_exist() {
         let summary = summary_with_ports(Vec::new());
 
-        assert_eq!(summary.primary_port_text(), "Unknown");
         assert_eq!(summary.remaining_port_count(), 0);
         assert_eq!(summary.primary_port(), None);
     }
 
     #[test]
-    fn primary_port_text_returns_single_port_without_suffix() {
+    fn primary_port_returns_single_port() {
         let summary = summary_with_ports(vec![BoundPort {
             protocol: PortProtocol::Tcp,
             port: 3000,
         }]);
 
-        assert_eq!(summary.primary_port_text(), "3000");
+        assert_eq!(
+            summary.primary_port(),
+            Some(BoundPort {
+                protocol: PortProtocol::Tcp,
+                port: 3000,
+            })
+        );
         assert_eq!(summary.remaining_port_count(), 0);
     }
 
     #[test]
-    fn primary_port_text_appends_remaining_port_count() {
+    fn remaining_port_count_excludes_primary_port() {
         let summary = summary_with_ports(vec![
             BoundPort {
                 protocol: PortProtocol::Tcp,
@@ -113,7 +105,6 @@ mod tests {
             },
         ]);
 
-        assert_eq!(summary.primary_port_text(), "3000 +2");
         assert_eq!(summary.remaining_port_count(), 2);
     }
 }

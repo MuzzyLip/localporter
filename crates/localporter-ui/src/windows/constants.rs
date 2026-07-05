@@ -3,8 +3,9 @@ pub const APP_NAME: &str = "LocalPorter";
 pub const DEFAULT_WIDTH: f32 = 600.0;
 pub const DEFAULT_HEIGHT: f32 = 520.0;
 
-pub const MIN_WIDTH: f32 = 400.0;
-pub const MIN_HEIGHT: f32 = 350.0;
+pub const MIN_WIDTH: f32 = 500.0;
+pub const MIN_HEIGHT: f32 = 432.0;
+pub const WINDOW_CORNER_RADIUS: u8 = 18;
 
 pub const WINDOWS_RESIZEABLE: bool = true;
-pub const WINDOWS_DECORATED: bool = true;
+pub const WINDOWS_DECORATED: bool = false;

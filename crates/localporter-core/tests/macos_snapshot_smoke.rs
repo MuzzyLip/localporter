@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use localporter_core::{
-    SnapshotService,
+    PortQueryScope, SnapshotService,
     adapter::macos::command::{
         LsofPortSource, PsParentChainSource, PsProcessInfoSource, StdCommandRunner,
     },
@@ -18,7 +18,7 @@ fn collects_local_ports_with_best_effort_and_prints_snapshot() {
         Arc::new(PsParentChainSource::new(runner)),
     );
 
-    let snapshot = service.collect_snapshot();
+    let snapshot = service.collect_snapshot(PortQueryScope::ListenOnly);
 
     println!("collected_at: {:?}", snapshot.collected_at);
     println!("items: {}", snapshot.items.len());

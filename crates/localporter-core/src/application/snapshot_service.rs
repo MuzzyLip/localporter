@@ -5,7 +5,10 @@ use std::{
 };
 
 use crate::{
-    domain::{BoundPort, CollectionWarning, ProcessOrigin, ProcessSnapshot, ProcessSummary},
+    domain::{
+        BoundPort, CollectionWarning, PortQueryScope, ProcessOrigin, ProcessSnapshot,
+        ProcessSummary,
+    },
     error::SourceError,
     sources::{BoundPortSource, ParentChainSource, ProcessInfoSource},
 };
@@ -31,11 +34,11 @@ impl SnapshotService {
         }
     }
 
-    pub fn collect_snapshot(&self) -> ProcessSnapshot {
+    pub fn collect_snapshot(&self, scope: PortQueryScope) -> ProcessSnapshot {
         let collected_at = SystemTime::now();
         let mut warnings = Vec::new();
 
-        let bindings = match self.port_source.collect_bound_ports() {
+        let bindings = match self.port_source.collect_bound_ports(scope) {
             Ok(bindings) => bindings,
             Err(error) => {
                 warnings.push(map_source_error("bound_ports", None, error));

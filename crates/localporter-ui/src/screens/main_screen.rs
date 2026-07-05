@@ -7,9 +7,6 @@ pub struct MainScreen {
 
 impl MainScreen {
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui, state: &AppState) {
-        ui.heading("LocalPorter");
-        ui.separator();
-
         let Some(snapshot) = &state.snapshot else {
             ui.label("Waiting for first snapshot...");
             return;

@@ -1,5 +1,11 @@
-use crate::{SourceError, domain::ProcessPortBinding};
+use crate::{
+    SourceError,
+    domain::{PortQueryScope, ProcessPortBinding},
+};
 
 pub trait BoundPortSource: Send + Sync {
-    fn collect_bound_ports(&self) -> Result<Vec<ProcessPortBinding>, SourceError>;
+    fn collect_bound_ports(
+        &self,
+        scope: PortQueryScope,
+    ) -> Result<Vec<ProcessPortBinding>, SourceError>;
 }

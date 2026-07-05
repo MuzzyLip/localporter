@@ -128,7 +128,7 @@ pub fn parse_etime(raw: &str) -> Option<Duration> {
 }
 
 fn extract_port(value: &str) -> Option<u16> {
-    let value = value.trim().split_whitespace().next()?;
+    let value = value.split_whitespace().next()?;
     value.rsplit(':').next()?.parse::<u16>().ok()
 }
 

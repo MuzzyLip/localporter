@@ -6,7 +6,7 @@ pub mod sources;
 
 pub use application::SnapshotService;
 pub use domain::{
-    BoundPort, CollectionWarning, ParentProcess, PortProtocol, ProcessOrigin, ProcessPortBinding,
-    ProcessSnapshot, ProcessSummary,
+    BoundPort, CollectionWarning, ParentProcess, PortProtocol, PortQueryScope, ProcessOrigin,
+    ProcessPortBinding, ProcessSnapshot, ProcessSummary,
 };
 pub use error::SourceError;

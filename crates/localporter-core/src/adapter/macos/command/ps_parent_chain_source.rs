@@ -57,13 +57,12 @@ impl ParentChainSource for PsParentChainSource {
                             "command=",
                             "-ww",
                         ],
-                    ) {
-                        if let Ok((resolved_pid, _, resolved_name)) = parse_ps_parent_row(&raw) {
-                            chain.push(ParentProcess {
-                                name: resolved_name,
-                                pid: resolved_pid,
-                            });
-                        }
+                    ) && let Ok((resolved_pid, _, resolved_name)) = parse_ps_parent_row(&raw)
+                    {
+                        chain.push(ParentProcess {
+                            name: resolved_name,
+                            pid: resolved_pid,
+                        });
                     }
                 }
                 break;

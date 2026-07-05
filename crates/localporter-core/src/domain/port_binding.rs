@@ -4,6 +4,13 @@ pub enum PortProtocol {
     Udp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PortQueryScope {
+    #[default]
+    ListenOnly,
+    AllTcp,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BoundPort {
     pub protocol: PortProtocol,

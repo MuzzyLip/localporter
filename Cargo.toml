@@ -12,6 +12,7 @@ edition = "2024"
 
 [workspace.dependencies]
 eframe = "0.35.0"
+egui_extras = { version = "0.35.0", features = ["all_loaders"] }
 
 localporter-ui = { path = "crates/localporter-ui" }
 localporter-core = { path = "crates/localporter-core" }
