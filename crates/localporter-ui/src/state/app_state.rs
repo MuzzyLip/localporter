@@ -1,7 +1,7 @@
 use std::{
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use eframe::egui;
@@ -65,5 +65,37 @@ impl AppState {
             );
             self.snapshot = Some(snapshot);
         }
+    }
+
+    pub fn elapsed_since_collection(&self) -> Duration {
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| elapsed_since(snapshot.collected_at, SystemTime::now()))
+            .unwrap_or_default()
+    }
+}
+
+fn elapsed_since(collected_at: SystemTime, now: SystemTime) -> Duration {
+    now.duration_since(collected_at).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elapsed_since_returns_difference_when_now_is_later() {
+        let collected_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(107);
+
+        assert_eq!(elapsed_since(collected_at, now), Duration::from_secs(7));
+    }
+
+    #[test]
+    fn elapsed_since_returns_zero_when_clock_moves_backwards() {
+        let collected_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(95);
+
+        assert_eq!(elapsed_since(collected_at, now), Duration::ZERO);
     }
 }
