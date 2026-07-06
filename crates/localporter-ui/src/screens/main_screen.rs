@@ -8,7 +8,10 @@ pub struct MainScreen {
 impl MainScreen {
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui, state: &AppState) {
         let Some(snapshot) = &state.snapshot else {
-            ui.label("Waiting for first snapshot...");
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label("Waiting for first snapshot...");
+            });
             return;
         };
         let uptime_offset = state.elapsed_since_collection();

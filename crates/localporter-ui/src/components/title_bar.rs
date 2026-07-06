@@ -10,9 +10,11 @@ pub struct TitleBar;
 
 impl TitleBar {
     const HEIGHT: f32 = 44.0;
-    const BUTTON_HEIGHT: f32 = 32.0;
-    const WINDOWS_BUTTON_WIDTH: f32 = 46.0;
-    const WINDOWS_CLUSTER_WIDTH: f32 = Self::WINDOWS_BUTTON_WIDTH * 3.0;
+    const BUTTON_HEIGHT: f32 = 24.0;
+    const WINDOWS_BUTTON_WIDTH: f32 = 24.0;
+    const WINDOWS_BUTTON_GAP: f32 = 4.0;
+    const WINDOWS_CLUSTER_WIDTH: f32 =
+        Self::WINDOWS_BUTTON_WIDTH * 3.0 + Self::WINDOWS_BUTTON_GAP * 2.0;
     const MAC_BUTTON_SIZE: f32 = 12.0;
     const MAC_BUTTON_GAP: f32 = 8.0;
     const MAC_CLUSTER_WIDTH: f32 = Self::MAC_BUTTON_SIZE * 3.0 + Self::MAC_BUTTON_GAP * 2.0;
@@ -143,7 +145,7 @@ impl TitleBar {
                 egui::vec2(Self::WINDOWS_CLUSTER_WIDTH, Self::BUTTON_HEIGHT),
                 Layout::right_to_left(Align::Center),
                 |ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.spacing_mut().item_spacing.x = Self::WINDOWS_BUTTON_GAP;
 
                     self.desktop_button(ui, DesktopButtonKind::Close, maximized);
                     self.desktop_button(ui, DesktopButtonKind::Maximize, maximized);
@@ -232,12 +234,7 @@ impl TitleBar {
         );
 
         let fill = if response.hovered() {
-            match kind {
-                DesktopButtonKind::Close => Color32::from_rgb(232, 17, 35),
-                DesktopButtonKind::Minimize | DesktopButtonKind::Maximize => {
-                    Color32::from_rgba_unmultiplied(0, 0, 0, 10)
-                }
-            }
+            Color32::from_rgba_unmultiplied(0, 0, 0, 10)
         } else {
             Color32::TRANSPARENT
         };
@@ -263,8 +260,10 @@ impl TitleBar {
         } else {
             Color32::from_rgb(70, 77, 87)
         };
-        let icon_rect =
-            egui::Rect::from_center_size(rect.center(), egui::vec2(Self::DESKTOP_ICON_SIZE, Self::DESKTOP_ICON_SIZE));
+        let icon_rect = egui::Rect::from_center_size(
+            rect.center(),
+            egui::vec2(Self::DESKTOP_ICON_SIZE, Self::DESKTOP_ICON_SIZE),
+        );
 
         ui.put(
             icon_rect,
@@ -312,8 +311,10 @@ impl TitleBar {
     }
 
     fn paint_macos_icon(&self, ui: &mut egui::Ui, center: egui::Pos2, kind: MacButtonKind) {
-        let icon_rect =
-            egui::Rect::from_center_size(center, egui::vec2(Self::MAC_ICON_SIZE, Self::MAC_ICON_SIZE));
+        let icon_rect = egui::Rect::from_center_size(
+            center,
+            egui::vec2(Self::MAC_ICON_SIZE, Self::MAC_ICON_SIZE),
+        );
 
         ui.put(
             icon_rect,

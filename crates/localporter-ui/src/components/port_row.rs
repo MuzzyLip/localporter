@@ -83,6 +83,7 @@ impl PortRow {
             });
     }
 
+    // Render Port Column
     fn port_column(&self, ui: &mut egui::Ui, process: &ProcessSummary) {
         let color = match process.primary_port().map(|port| port.protocol) {
             Some(localporter_core::PortProtocol::Tcp) => Color32::from_rgb(120, 170, 255),
@@ -93,6 +94,7 @@ impl PortRow {
         self.port_label(ui, process, color);
     }
 
+    // Render Center Column
     fn center_column(&self, ui: &mut egui::Ui, process: &ProcessSummary, uptime_offset: Duration) {
         let rect = ui.max_rect();
         let title_rect =
@@ -144,6 +146,7 @@ impl PortRow {
         );
     }
 
+    // Render Meta Text
     fn meta_text(&self, ui: &mut egui::Ui, text: String) {
         ui.label(
             RichText::new(text)
@@ -152,6 +155,7 @@ impl PortRow {
         );
     }
 
+    // Render Port Label
     fn port_label(&self, ui: &mut egui::Ui, process: &ProcessSummary, color: Color32) {
         let (rect, _) = ui.allocate_exact_size(
             egui::vec2(Self::PORT_LABEL_WIDTH, Self::PORT_LABEL_HEIGHT),
@@ -205,6 +209,7 @@ impl PortRow {
         }
     }
 
+    // Render Value or Unknown
     fn value_or_unknown(value: &str) -> &str {
         if value.trim().is_empty() {
             "Unknown"
@@ -213,6 +218,7 @@ impl PortRow {
         }
     }
 
+    // Format Uptime
     fn format_uptime(uptime: Duration) -> String {
         let total_secs = uptime.as_secs();
         let hours = total_secs / 3600;
@@ -228,6 +234,7 @@ impl PortRow {
         }
     }
 
+    // Format Memory
     fn format_memory(memory_bytes: u64) -> String {
         const KB: f64 = 1024.0;
         const MB: f64 = KB * 1024.0;
