@@ -1,6 +1,7 @@
 mod bottom_bar;
 mod collapsible_panel;
 mod confirm_dialog;
+mod filter_bar;
 mod port_row;
 mod port_row_details;
 mod process_panel;
@@ -12,6 +13,7 @@ mod toast_overlay;
 pub use bottom_bar::BottomBar;
 pub use collapsible_panel::CollapsiblePanel;
 pub use confirm_dialog::ConfirmDialog;
+pub use filter_bar::FilterBar;
 pub use port_row::PortRow;
 pub use port_row_details::{PortRowDetails, PortRowDetailsAction};
 pub use process_panel::{ProcessPanel, ProcessPanelAction};

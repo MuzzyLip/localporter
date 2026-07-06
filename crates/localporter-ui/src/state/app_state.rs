@@ -19,7 +19,7 @@ use localporter_core::adapter::macos::command::{
 use localporter_core::adapter::windows::command::{
     CimParentChainSource, CimProcessInfoSource, NetConnectionPortSource,
 };
-use localporter_core::{PortQueryScope, ProcessSnapshot, SnapshotService};
+use localporter_core::{PortQueryScope, ProcessSnapshot, ProcessSummary, SnapshotService};
 
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
@@ -270,8 +270,13 @@ impl AppState {
         });
     }
 
+    #[allow(dead_code)]
     pub fn kill_all_killable(&mut self) {
-        let pids = self.killable_pids();
+        self.kill_processes(self.killable_pids());
+    }
+
+    pub fn kill_processes(&mut self, pids: Vec<u32>) {
+        let pids = self.normalize_kill_pids(pids);
         if pids.is_empty() {
             return;
         }
@@ -311,8 +316,13 @@ impl AppState {
         self.kill_in_flight_pids.contains(&pid) || self.kill_waiting_refresh_pids.contains(&pid)
     }
 
+    #[allow(dead_code)]
     pub fn killable_process_count(&self) -> usize {
         self.killable_pids().len()
+    }
+
+    pub fn is_process_killable(&self, process: &ProcessSummary) -> bool {
+        is_killable_process(process) && !self.is_kill_pending(process.pid)
     }
 
     pub fn settings(&self) -> &AppSettings {
@@ -490,6 +500,7 @@ impl AppState {
         self.ctx.request_repaint();
     }
 
+    #[allow(dead_code)]
     fn killable_pids(&self) -> Vec<u32> {
         let Some(snapshot) = &self.snapshot else {
             return Vec::new();
@@ -498,9 +509,27 @@ impl AppState {
         snapshot
             .items
             .iter()
-            .filter(|process| is_killable_process(process))
+            .filter(|process| self.is_process_killable(process))
             .map(|process| process.pid)
-            .filter(|pid| !self.is_kill_pending(*pid))
+            .collect()
+    }
+
+    fn normalize_kill_pids(&self, pids: Vec<u32>) -> Vec<u32> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+
+        let mut seen = HashSet::new();
+        pids.into_iter()
+            .filter(|pid| seen.insert(*pid))
+            .filter(|pid| {
+                snapshot
+                    .items
+                    .iter()
+                    .find(|process| process.pid == *pid)
+                    .map(|process| self.is_process_killable(process))
+                    .unwrap_or(false)
+            })
             .collect()
     }
 }

@@ -6,6 +6,153 @@ use localporter_core::{BoundPort, PortProtocol, ProcessSummary};
 #[derive(Default)]
 pub struct PortRow;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherCategory {
+    Browser,
+    Terminal,
+    Editor,
+    Desktop,
+    Runtime,
+    System,
+    Unknown,
+    Generic,
+}
+
+impl LauncherCategory {
+    fn detect(launcher: &str) -> Self {
+        let normalized = launcher.trim().to_ascii_lowercase();
+
+        if normalized.is_empty() || normalized == "unknown" {
+            return Self::Unknown;
+        }
+
+        if Self::matches_any(
+            &normalized,
+            &[
+                "chrome", "msedge", "edge", "firefox", "safari", "arc", "brave", "opera", "vivaldi",
+            ],
+        ) {
+            Self::Browser
+        } else if Self::matches_any(
+            &normalized,
+            &[
+                "terminal",
+                "powershell",
+                "pwsh",
+                "cmd",
+                "wezterm",
+                "iterm",
+                "kitty",
+                "alacritty",
+                "hyper",
+                "warp",
+            ],
+        ) {
+            Self::Terminal
+        } else if Self::matches_any(
+            &normalized,
+            &[
+                "code",
+                "cursor",
+                "windsurf",
+                "zed",
+                "sublime",
+                "notepad++",
+                "webstorm",
+                "rider",
+                "idea",
+                "clion",
+                "pycharm",
+                "goland",
+                "rubymine",
+                "devenv",
+                "studio",
+            ],
+        ) {
+            Self::Editor
+        } else if Self::matches_any(
+            &normalized,
+            &["explorer", "finder", "dock", "loginwindow", "desktop"],
+        ) {
+            Self::Desktop
+        } else if Self::matches_runtime(&normalized) {
+            Self::Runtime
+        } else if Self::matches_any(
+            &normalized,
+            &[
+                "system", "launchd", "services", "svchost", "init", "systemd",
+            ],
+        ) {
+            Self::System
+        } else {
+            Self::Generic
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Browser => "Browser",
+            Self::Terminal => "Terminal",
+            Self::Editor => "Editor",
+            Self::Desktop => "Desktop",
+            Self::Runtime => "Runtime",
+            Self::System => "System",
+            Self::Unknown => "Unknown",
+            Self::Generic => "App",
+        }
+    }
+
+    fn icon_source(self) -> egui::ImageSource<'static> {
+        match self {
+            Self::Browser => {
+                egui::include_image!("../../assets/icons/port-row/launcher-browser.svg")
+            }
+            Self::Terminal => {
+                egui::include_image!("../../assets/icons/port-row/launcher-terminal.svg")
+            }
+            Self::Editor => egui::include_image!("../../assets/icons/port-row/launcher-editor.svg"),
+            Self::Desktop => {
+                egui::include_image!("../../assets/icons/port-row/launcher-desktop.svg")
+            }
+            Self::Runtime => {
+                egui::include_image!("../../assets/icons/port-row/launcher-runtime.svg")
+            }
+            Self::System => egui::include_image!("../../assets/icons/port-row/launcher-system.svg"),
+            Self::Unknown => {
+                egui::include_image!("../../assets/icons/port-row/launcher-unknown.svg")
+            }
+            Self::Generic => {
+                egui::include_image!("../../assets/icons/port-row/launcher-generic.svg")
+            }
+        }
+    }
+
+    fn matches_any(value: &str, patterns: &[&str]) -> bool {
+        patterns.iter().any(|pattern| value.contains(pattern))
+    }
+
+    fn matches_runtime(value: &str) -> bool {
+        let executable = Self::executable_name(value);
+
+        Self::matches_any(
+            executable,
+            &[
+                "node", "nodejs", "python", "py", "java", "javac", "javaw", "cargo", "rustc",
+                "deno", "bun", "ruby", "rubyw", "php", "perl", "dotnet", "mono", "scala",
+                "kotlinc",
+            ],
+        ) || executable == "go"
+    }
+
+    fn executable_name(value: &str) -> &str {
+        value
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(value)
+            .trim_end_matches(".exe")
+    }
+}
+
 impl PortRow {
     const PORT_COLUMN_WIDTH: f32 = 80.0;
     const ROW_MIN_HEIGHT: f32 = 50.0;
@@ -13,6 +160,9 @@ impl PortRow {
     const PORT_CENTER_SPACING: f32 = 12.0;
     const TITLE_HEIGHT: f32 = 22.0;
     const META_HEIGHT: f32 = 18.0;
+    const META_ICON_SIZE: f32 = 12.0;
+    const META_TEXT_SIZE: f32 = 13.0;
+    const META_ICON_SPACING: f32 = 4.0;
 
     pub fn ui(
         &mut self,
@@ -92,21 +242,21 @@ impl PortRow {
             |ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
 
-                self.meta_text(
+                self.launcher_meta(ui, &process.launcher);
+                self.meta_icon_text(
                     ui,
-                    format!("Launcher {}", Self::value_or_unknown(&process.launcher)),
+                    Self::uptime_icon_source(),
+                    Self::format_uptime(process.uptime.saturating_add(uptime_offset)),
                 );
-                self.meta_text(
+                self.meta_icon_text(
                     ui,
-                    format!(
-                        "Uptime {}",
-                        Self::format_uptime(process.uptime.saturating_add(uptime_offset))
-                    ),
+                    Self::cpu_icon_source(),
+                    format!("{:.1}%", process.cpu_percent),
                 );
-                self.meta_text(ui, format!("CPU {:.1}%", process.cpu_percent));
-                self.meta_text(
+                self.meta_icon_text(
                     ui,
-                    format!("Memory {}", Self::format_memory(process.memory_usage)),
+                    Self::memory_icon_source(),
+                    Self::format_memory(process.memory_usage),
                 );
             },
         );
@@ -115,9 +265,40 @@ impl PortRow {
     fn meta_text(&self, ui: &mut egui::Ui, text: String) {
         ui.label(
             RichText::new(text)
-                .size(13.0)
+                .size(Self::META_TEXT_SIZE)
                 .color(Color32::from_rgb(112, 118, 126)),
         );
+    }
+
+    fn meta_icon_text(&self, ui: &mut egui::Ui, icon: egui::ImageSource<'static>, text: String) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = Self::META_ICON_SPACING;
+
+            ui.add(
+                egui::Image::new(icon)
+                    .fit_to_exact_size(egui::vec2(Self::META_ICON_SIZE, Self::META_ICON_SIZE))
+                    .tint(Color32::from_rgb(112, 118, 126)),
+            );
+            self.meta_text(ui, text);
+        });
+    }
+
+    fn launcher_meta(&self, ui: &mut egui::Ui, launcher: &str) {
+        let category = LauncherCategory::detect(launcher);
+        let response = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = Self::META_ICON_SPACING;
+
+                ui.add(
+                    egui::Image::new(category.icon_source())
+                        .fit_to_exact_size(egui::vec2(Self::META_ICON_SIZE, Self::META_ICON_SIZE))
+                        .tint(Color32::from_rgb(112, 118, 126)),
+                );
+                self.meta_text(ui, Self::value_or_unknown(launcher).to_owned());
+            })
+            .response;
+
+        response.on_hover_text(format!("Launcher category: {}", category.label()));
     }
 
     fn port_label(&self, ui: &mut egui::Ui, port: Option<BoundPort>) {
@@ -182,5 +363,94 @@ impl PortRow {
         } else {
             format!("{memory_bytes} B")
         }
+    }
+
+    fn uptime_icon_source() -> egui::ImageSource<'static> {
+        egui::include_image!("../../assets/icons/port-row/uptime.svg")
+    }
+
+    fn cpu_icon_source() -> egui::ImageSource<'static> {
+        egui::include_image!("../../assets/icons/port-row/cpu-usage.svg")
+    }
+
+    fn memory_icon_source() -> egui::ImageSource<'static> {
+        egui::include_image!("../../assets/icons/port-row/memory-usage.svg")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LauncherCategory;
+
+    #[test]
+    fn detects_browser_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("chrome.exe"),
+            LauncherCategory::Browser
+        );
+    }
+
+    #[test]
+    fn detects_terminal_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("WindowsTerminal.exe"),
+            LauncherCategory::Terminal
+        );
+    }
+
+    #[test]
+    fn detects_editor_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("Code.exe"),
+            LauncherCategory::Editor
+        );
+    }
+
+    #[test]
+    fn detects_desktop_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("explorer.exe"),
+            LauncherCategory::Desktop
+        );
+    }
+
+    #[test]
+    fn detects_system_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("systemd"),
+            LauncherCategory::System
+        );
+    }
+
+    #[test]
+    fn detects_runtime_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("node.exe"),
+            LauncherCategory::Runtime
+        );
+        assert_eq!(
+            LauncherCategory::detect("C:\\Python311\\python.exe"),
+            LauncherCategory::Runtime
+        );
+        assert_eq!(
+            LauncherCategory::detect("cargo.exe"),
+            LauncherCategory::Runtime
+        );
+    }
+
+    #[test]
+    fn detects_unknown_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("unknown"),
+            LauncherCategory::Unknown
+        );
+    }
+
+    #[test]
+    fn falls_back_to_generic_launcher_category() {
+        assert_eq!(
+            LauncherCategory::detect("custom-launcher.exe"),
+            LauncherCategory::Generic
+        );
     }
 }
