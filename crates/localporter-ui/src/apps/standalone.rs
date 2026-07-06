@@ -3,9 +3,9 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::{
-    components::{TitleBar, ToastOverlay},
-    screens::MainScreen,
-    state::AppState,
+    components::{BottomBar, ConfirmDialog, SettingsModal, TitleBar, ToastOverlay},
+    screens::{MainScreen, MainScreenAction},
+    state::{AppSettings, AppState},
     windows::constants::WINDOW_CORNER_RADIUS,
 };
 
@@ -13,10 +13,17 @@ pub struct StandaloneApp {
     state: AppState,
     title_bar: TitleBar,
     main_screen: MainScreen,
+    bottom_bar: BottomBar,
+    settings_modal: SettingsModal,
+    confirm_dialog: ConfirmDialog,
     toast_overlay: ToastOverlay,
+    settings_open: bool,
+    pending_settings: Option<AppSettings>,
+    pending_kill_action: Option<PendingKillAction>,
 }
 
 const WINDOW_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(251, 251, 251);
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl StandaloneApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -31,7 +38,13 @@ impl StandaloneApp {
             state: AppState::new(cc.egui_ctx.clone()),
             title_bar: TitleBar,
             main_screen: MainScreen::default(),
+            bottom_bar: BottomBar,
+            settings_modal: SettingsModal,
+            confirm_dialog: ConfirmDialog,
             toast_overlay: ToastOverlay,
+            settings_open: false,
+            pending_settings: None,
+            pending_kill_action: None,
         }
     }
 }
@@ -61,11 +74,40 @@ impl eframe::App for StandaloneApp {
                     self.state.set_show_all_enabled(show_all_enabled);
                 }
 
-                let content_rect = ui.available_rect_before_wrap();
+                let remaining_rect = ui.available_rect_before_wrap();
+                let bottom_bar_rect = egui::Rect::from_min_max(
+                    egui::pos2(
+                        remaining_rect.left(),
+                        (remaining_rect.bottom() - BottomBar::HEIGHT).max(remaining_rect.top()),
+                    ),
+                    remaining_rect.right_bottom(),
+                );
+                let content_rect = egui::Rect::from_min_max(
+                    remaining_rect.min,
+                    egui::pos2(remaining_rect.max.x, bottom_bar_rect.min.y),
+                );
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
                     ui.set_min_size(content_rect.size());
-                    self.main_screen.ui(ui, &mut self.state);
+                    if let Some(action) = self.main_screen.ui(ui, &mut self.state) {
+                        self.handle_main_screen_action(action);
+                    }
+                });
+
+                ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_bar_rect), |ui| {
+                    ui.set_min_size(bottom_bar_rect.size());
+                    let bottom_bar_response = self
+                        .bottom_bar
+                        .show(ui, self.state.killable_process_count());
+                    if bottom_bar_response.kill_all_clicked {
+                        self.request_kill_action(PendingKillAction::KillAllKillable);
+                    }
+                    if bottom_bar_response.settings_clicked {
+                        if !self.settings_open {
+                            self.pending_settings = Some(self.state.settings().clone());
+                        }
+                        self.settings_open = true;
+                    }
                 });
 
                 ui.painter().rect_stroke(
@@ -76,12 +118,107 @@ impl eframe::App for StandaloneApp {
                 );
             });
 
+        self.show_settings_modal(ui.ctx());
+        self.show_confirm_dialog(ui.ctx());
         self.toast_overlay.show(ui.ctx(), &toasts);
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
+}
+
+impl StandaloneApp {
+    fn handle_main_screen_action(&mut self, action: MainScreenAction) {
+        match action {
+            MainScreenAction::KillProcess(pid) => {
+                self.request_kill_action(PendingKillAction::Single(pid));
+            }
+        }
+    }
+
+    fn request_kill_action(&mut self, action: PendingKillAction) {
+        match action {
+            PendingKillAction::Single(pid) if self.state.is_kill_pending(pid) => {}
+            PendingKillAction::KillAllKillable if self.state.killable_process_count() == 0 => {}
+            _ if self.state.kill_requires_confirmation() => {
+                self.pending_kill_action = Some(action);
+            }
+            PendingKillAction::Single(pid) => self.state.kill_process(pid),
+            PendingKillAction::KillAllKillable => self.state.kill_all_killable(),
+        }
+    }
+
+    fn show_settings_modal(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        if self.pending_settings.is_none() {
+            self.pending_settings = Some(self.state.settings().clone());
+        }
+
+        let response = self.settings_modal.show(
+            ctx,
+            self.pending_settings
+                .as_mut()
+                .expect("pending settings should exist when modal is open"),
+            self.state.launch_at_startup_supported(),
+            APP_VERSION,
+        );
+
+        if response.save_requested {
+            if let Some(settings) = self.pending_settings.take() {
+                self.state.apply_settings(settings);
+            }
+            self.settings_open = false;
+        } else if response.close_requested {
+            self.pending_settings = None;
+            self.settings_open = false;
+        }
+    }
+
+    fn show_confirm_dialog(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending_kill_action else {
+            return;
+        };
+
+        let (title, message, confirm_label) = match action {
+            PendingKillAction::Single(pid) => (
+                "Confirm Kill",
+                format!("Kill PID {pid} now?"),
+                "Kill process",
+            ),
+            PendingKillAction::KillAllKillable => (
+                "Confirm Kill killable",
+                format!(
+                    "Kill {} killable process(es) now?",
+                    self.state.killable_process_count()
+                ),
+                "Kill killable",
+            ),
+        };
+
+        let response = self
+            .confirm_dialog
+            .show(ctx, title, &message, confirm_label);
+
+        if response.confirmed {
+            self.pending_kill_action = None;
+            match action {
+                PendingKillAction::Single(pid) => self.state.kill_process(pid),
+                PendingKillAction::KillAllKillable => self.state.kill_all_killable(),
+            }
+        } else if response.canceled {
+            self.pending_kill_action = None;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PendingKillAction {
+    Single(u32),
+    KillAllKillable,
 }
 
 fn full_corner_radius(maximized: bool) -> egui::CornerRadius {

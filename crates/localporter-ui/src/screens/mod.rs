@@ -1,3 +1,3 @@
 mod main_screen;
 
-pub use main_screen::MainScreen;
+pub use main_screen::{MainScreen, MainScreenAction};

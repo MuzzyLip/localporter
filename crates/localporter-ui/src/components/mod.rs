@@ -1,15 +1,21 @@
+mod bottom_bar;
 mod collapsible_panel;
+mod confirm_dialog;
 mod port_row;
 mod port_row_details;
 mod process_panel;
+mod settings_modal;
 mod switch;
 mod title_bar;
 mod toast_overlay;
 
+pub use bottom_bar::BottomBar;
 pub use collapsible_panel::CollapsiblePanel;
+pub use confirm_dialog::ConfirmDialog;
 pub use port_row::PortRow;
 pub use port_row_details::{PortRowDetails, PortRowDetailsAction};
 pub use process_panel::{ProcessPanel, ProcessPanelAction};
+pub use settings_modal::SettingsModal;
 pub use switch::Switch;
 pub use title_bar::TitleBar;
 pub use toast_overlay::ToastOverlay;

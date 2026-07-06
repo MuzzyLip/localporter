@@ -21,19 +21,25 @@ use localporter_core::adapter::windows::command::{
 };
 use localporter_core::{PortQueryScope, ProcessSnapshot, SnapshotService};
 
-const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
+
+use super::settings::{
+    AppSettings, KillBehavior, launch_at_startup_supported, read_launch_at_startup,
+    write_launch_at_startup,
+};
 
 pub struct AppState {
     pub show_all_enabled: bool,
     pub snapshot: Option<ProcessSnapshot>,
+    settings: AppSettings,
     ctx: egui::Context,
     request_id: u64,
     next_toast_id: u64,
     toasts: Vec<ToastNotification>,
     kill_in_flight_pids: HashSet<u32>,
     kill_waiting_refresh_pids: HashSet<u32>,
+    poll_interval_ms: Arc<AtomicU64>,
     command_tx: mpsc::Sender<CollectionCommand>,
     update_tx: mpsc::Sender<AppUpdate>,
     update_rx: mpsc::Receiver<AppUpdate>,
@@ -90,14 +96,33 @@ struct KillUpdate {
 }
 
 #[derive(Debug)]
+struct KillAllUpdate {
+    successes: Vec<u32>,
+    failures: Vec<KillFailure>,
+}
+
+#[derive(Debug)]
+struct KillFailure {
+    pid: u32,
+    message: String,
+}
+
+#[derive(Debug)]
 enum AppUpdate {
     Snapshot(SnapshotUpdate),
-    Toast(ToastUpdate),
     KillFinished(KillUpdate),
+    KillAllFinished(KillAllUpdate),
 }
 
 impl AppState {
     pub fn new(ctx: egui::Context) -> Self {
+        let mut settings = AppSettings::load();
+        if launch_at_startup_supported() {
+            if let Ok(enabled) = read_launch_at_startup() {
+                settings.launch_at_startup = enabled;
+            }
+        }
+
         let initial_request = CollectionRequest {
             scope: PortQueryScope::ListenOnly,
             request_id: 0,
@@ -107,6 +132,10 @@ impl AppState {
         let (command_tx, command_rx) = mpsc::channel();
         let (completed_tx, completed_rx) = mpsc::channel();
         let worker_ctx = ctx.clone();
+        let poll_interval_ms = Arc::new(AtomicU64::new(
+            settings.refresh_interval.duration().as_millis() as u64,
+        ));
+        let worker_poll_interval_ms = poll_interval_ms.clone();
 
         thread::spawn(move || {
             let service = Arc::new(build_snapshot_service());
@@ -128,7 +157,10 @@ impl AppState {
                 while let Ok(completed_request_id) = completed_rx.try_recv() {
                     active_request_ids.remove(&completed_request_id);
                 }
-                match command_rx.recv_timeout(SNAPSHOT_POLL_INTERVAL) {
+                let timeout =
+                    Duration::from_millis(worker_poll_interval_ms.load(Ordering::Relaxed).max(250));
+
+                match command_rx.recv_timeout(timeout) {
                     Ok(CollectionCommand::UpdateRequest(next_request)) => {
                         request = next_request;
                         current_request_id.store(request.request_id, Ordering::Relaxed);
@@ -163,12 +195,14 @@ impl AppState {
         Self {
             show_all_enabled: false,
             snapshot: None,
+            settings,
             ctx,
             request_id: 0,
             next_toast_id: 0,
             toasts: Vec::new(),
             kill_in_flight_pids: HashSet::new(),
             kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms,
             command_tx,
             update_tx,
             update_rx,
@@ -201,8 +235,8 @@ impl AppState {
                     latest_snapshot = Some(snapshot.snapshot);
                 }
                 AppUpdate::Snapshot(_) => {}
-                AppUpdate::Toast(toast) => self.push_toast(toast),
                 AppUpdate::KillFinished(kill) => self.handle_kill_update(kill),
+                AppUpdate::KillAllFinished(kill_all) => self.handle_kill_all_update(kill_all),
             }
         }
 
@@ -236,8 +270,112 @@ impl AppState {
         });
     }
 
+    pub fn kill_all_killable(&mut self) {
+        let pids = self.killable_pids();
+        if pids.is_empty() {
+            return;
+        }
+
+        for pid in &pids {
+            self.kill_in_flight_pids.insert(*pid);
+        }
+
+        self.request_id = self.request_id.saturating_add(1);
+        let update_tx = self.update_tx.clone();
+        let ctx = self.ctx.clone();
+        self.ctx.request_repaint();
+
+        thread::spawn(move || {
+            let mut successes = Vec::new();
+            let mut failures = Vec::new();
+
+            for pid in pids {
+                match kill_process_by_pid(pid) {
+                    Ok(()) => successes.push(pid),
+                    Err(error) => failures.push(KillFailure {
+                        pid,
+                        message: format_source_error(&error),
+                    }),
+                }
+            }
+
+            let _ = update_tx.send(AppUpdate::KillAllFinished(KillAllUpdate {
+                successes,
+                failures,
+            }));
+            ctx.request_repaint();
+        });
+    }
+
     pub fn is_kill_pending(&self, pid: u32) -> bool {
         self.kill_in_flight_pids.contains(&pid) || self.kill_waiting_refresh_pids.contains(&pid)
+    }
+
+    pub fn killable_process_count(&self) -> usize {
+        self.killable_pids().len()
+    }
+
+    pub fn settings(&self) -> &AppSettings {
+        &self.settings
+    }
+
+    pub fn apply_settings(&mut self, mut settings: AppSettings) {
+        let previous = self.settings.clone();
+        let refresh_changed = previous.refresh_interval != settings.refresh_interval;
+        let startup_changed = previous.launch_at_startup != settings.launch_at_startup;
+        let mut has_error = false;
+
+        if startup_changed {
+            match write_launch_at_startup(settings.launch_at_startup) {
+                Ok(()) => {}
+                Err(message) => {
+                    has_error = true;
+                    settings.launch_at_startup = previous.launch_at_startup;
+                    self.push_toast(ToastUpdate {
+                        level: ToastLevel::Error,
+                        message: format!("Failed to update launch at startup: {message}"),
+                    });
+                }
+            }
+        }
+
+        if refresh_changed {
+            self.poll_interval_ms.store(
+                settings.refresh_interval.duration().as_millis() as u64,
+                Ordering::Relaxed,
+            );
+        }
+
+        self.settings = settings;
+        let settings_changed = self.settings != previous;
+
+        if settings_changed {
+            if let Err(error) = self.settings.save() {
+                self.push_toast(ToastUpdate {
+                    level: ToastLevel::Error,
+                    message: format!("Failed to save settings: {error}"),
+                });
+            } else if !has_error {
+                self.push_toast(ToastUpdate {
+                    level: ToastLevel::Success,
+                    message: "Settings saved".to_owned(),
+                });
+            }
+        }
+
+        if refresh_changed {
+            self.request_collection();
+        }
+
+        self.ctx.request_repaint();
+    }
+
+    pub fn launch_at_startup_supported(&self) -> bool {
+        launch_at_startup_supported()
+    }
+
+    pub fn kill_requires_confirmation(&self) -> bool {
+        self.settings.kill_behavior == KillBehavior::Confirm
     }
 
     pub fn elapsed_since_collection(&self) -> Duration {
@@ -300,24 +438,70 @@ impl AppState {
         match kill.outcome {
             Ok(()) => {
                 self.kill_waiting_refresh_pids.insert(kill.pid);
-                let _ = self.update_tx.send(AppUpdate::Toast(ToastUpdate {
+                self.push_toast(ToastUpdate {
                     level: ToastLevel::Success,
                     message: format!("Killed PID {}", kill.pid),
-                }));
+                });
                 let _ = self
                     .command_tx
                     .send(CollectionCommand::UpdateRequest(self.current_request()));
             }
             Err(message) => {
                 self.kill_waiting_refresh_pids.remove(&kill.pid);
-                let _ = self.update_tx.send(AppUpdate::Toast(ToastUpdate {
+                self.push_toast(ToastUpdate {
                     level: ToastLevel::Error,
                     message: format!("Failed to kill PID {}: {message}", kill.pid),
-                }));
+                });
             }
         }
 
         self.ctx.request_repaint();
+    }
+
+    fn handle_kill_all_update(&mut self, kill_all: KillAllUpdate) {
+        for pid in &kill_all.successes {
+            self.kill_in_flight_pids.remove(pid);
+            self.kill_waiting_refresh_pids.insert(*pid);
+        }
+
+        for failure in &kill_all.failures {
+            self.kill_in_flight_pids.remove(&failure.pid);
+            self.kill_waiting_refresh_pids.remove(&failure.pid);
+        }
+
+        let summary = format_kill_all_summary(&kill_all.successes, &kill_all.failures);
+        let level = if kill_all.successes.is_empty() {
+            ToastLevel::Error
+        } else {
+            ToastLevel::Success
+        };
+
+        self.push_toast(ToastUpdate {
+            level,
+            message: summary,
+        });
+
+        if !kill_all.successes.is_empty() {
+            let _ = self
+                .command_tx
+                .send(CollectionCommand::UpdateRequest(self.current_request()));
+        }
+
+        self.ctx.request_repaint();
+    }
+
+    fn killable_pids(&self) -> Vec<u32> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+
+        snapshot
+            .items
+            .iter()
+            .filter(|process| is_killable_process(process))
+            .map(|process| process.pid)
+            .filter(|pid| !self.is_kill_pending(*pid))
+            .collect()
     }
 }
 
@@ -411,9 +595,106 @@ fn format_source_error(error: &localporter_core::SourceError) -> String {
     }
 }
 
+fn format_kill_all_summary(successes: &[u32], failures: &[KillFailure]) -> String {
+    match (successes.len(), failures.len()) {
+        (0, 0) => "No killable processes".to_owned(),
+        (success_count, 0) => format!("Killed {success_count} killable process(es)"),
+        (0, 1) => format!(
+            "Failed to kill PID {}: {}",
+            failures[0].pid, failures[0].message
+        ),
+        (0, failure_count) => format!("Failed to kill {failure_count} killable process(es)"),
+        (success_count, failure_count) => {
+            format!("Killed {success_count} process(es), {failure_count} failed")
+        }
+    }
+}
+
+fn is_killable_process(process: &localporter_core::ProcessSummary) -> bool {
+    if process.pid == 0 {
+        return false;
+    }
+
+    let name = process.name.trim();
+    if name.is_empty() || name.eq_ignore_ascii_case("Unknown") {
+        return false;
+    }
+
+    let command = process.command.trim();
+    let launcher = process.launcher.trim();
+
+    if command.is_empty() || command.eq_ignore_ascii_case("Unknown") {
+        return false;
+    }
+
+    if command.eq_ignore_ascii_case(name) && launcher.eq_ignore_ascii_case("Unknown") {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        const WINDOWS_BLOCKLIST: &[&str] = &[
+            "system",
+            "system idle process",
+            "registry",
+            "memory compression",
+            "secure system",
+            "smss.exe",
+            "csrss.exe",
+            "wininit.exe",
+            "services.exe",
+            "lsass.exe",
+            "winlogon.exe",
+            "dwm.exe",
+            "fontdrvhost.exe",
+            "svchost.exe",
+        ];
+
+        if process.pid == 4
+            || WINDOWS_BLOCKLIST
+                .iter()
+                .any(|blocked| name.eq_ignore_ascii_case(blocked))
+        {
+            return false;
+        }
+
+        if WINDOWS_BLOCKLIST
+            .iter()
+            .any(|blocked| launcher.eq_ignore_ascii_case(blocked))
+        {
+            return false;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        const MACOS_BLOCKLIST: &[&str] = &[
+            "launchd",
+            "kernel_task",
+            "WindowServer",
+            "Finder",
+            "Dock",
+            "loginwindow",
+            "ControlCenter",
+            "SystemUIServer",
+        ];
+
+        if process.pid == 1
+            || MACOS_BLOCKLIST
+                .iter()
+                .any(|blocked| name.eq_ignore_ascii_case(blocked))
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use localporter_core::ProcessSummary;
 
     #[test]
     fn elapsed_since_returns_difference_when_now_is_later() {
@@ -439,12 +720,14 @@ mod tests {
         let mut state = AppState {
             show_all_enabled: false,
             snapshot: None,
+            settings: AppSettings::default(),
             ctx: egui::Context::default(),
             request_id: 0,
             next_toast_id: 0,
             toasts: Vec::new(),
             kill_in_flight_pids: HashSet::new(),
             kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
             command_tx,
             update_tx,
             update_rx,
@@ -488,12 +771,14 @@ mod tests {
         let mut state = AppState {
             show_all_enabled: true,
             snapshot: None,
+            settings: AppSettings::default(),
             ctx: egui::Context::default(),
             request_id: 1,
             next_toast_id: 0,
             toasts: Vec::new(),
             kill_in_flight_pids: HashSet::new(),
             kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
             command_tx,
             update_tx,
             update_rx,
@@ -535,6 +820,7 @@ mod tests {
         let mut state = AppState {
             show_all_enabled: false,
             snapshot: None,
+            settings: AppSettings::default(),
             ctx: egui::Context::default(),
             request_id: 0,
             next_toast_id: 1,
@@ -546,6 +832,7 @@ mod tests {
             }],
             kill_in_flight_pids: HashSet::new(),
             kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
             command_tx,
             update_tx,
             update_rx,
@@ -573,12 +860,14 @@ mod tests {
         let mut state = AppState {
             show_all_enabled: false,
             snapshot: None,
+            settings: AppSettings::default(),
             ctx: egui::Context::default(),
             request_id: 1,
             next_toast_id: 0,
             toasts: Vec::new(),
             kill_in_flight_pids: HashSet::new(),
             kill_waiting_refresh_pids: HashSet::from([42]),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
             command_tx,
             update_tx,
             update_rx,
@@ -587,6 +876,124 @@ mod tests {
         state.drain_updates();
 
         assert!(!state.is_kill_pending(42));
+    }
+
+    #[test]
+    fn killable_process_count_excludes_pending_pids() {
+        let (update_tx, update_rx) = mpsc::channel();
+        let (command_tx, _command_rx) = mpsc::channel();
+
+        let mut state = AppState {
+            show_all_enabled: false,
+            snapshot: Some(ProcessSnapshot {
+                collected_at: SystemTime::UNIX_EPOCH,
+                items: vec![
+                    test_process(101, "node.exe", "node server.js", "powershell.exe"),
+                    test_process(202, "python.exe", "python -m http.server", "Code.exe"),
+                ],
+                warnings: Vec::new(),
+            }),
+            settings: AppSettings::default(),
+            ctx: egui::Context::default(),
+            request_id: 0,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::from([101]),
+            kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
+            command_tx,
+            update_tx,
+            update_rx,
+        };
+
+        assert_eq!(state.killable_process_count(), 1);
+
+        state.kill_waiting_refresh_pids.insert(202);
+        assert_eq!(state.killable_process_count(), 0);
+    }
+
+    #[test]
+    fn kill_all_update_requests_single_refresh_and_summary_toast() {
+        let (update_tx, update_rx) = mpsc::channel();
+        let (command_tx, command_rx) = mpsc::channel();
+
+        let mut state = AppState {
+            show_all_enabled: false,
+            snapshot: None,
+            settings: AppSettings::default(),
+            ctx: egui::Context::default(),
+            request_id: 7,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::from([100, 200]),
+            kill_waiting_refresh_pids: HashSet::new(),
+            poll_interval_ms: Arc::new(AtomicU64::new(2_000)),
+            command_tx,
+            update_tx,
+            update_rx,
+        };
+
+        state.handle_kill_all_update(KillAllUpdate {
+            successes: vec![100],
+            failures: vec![KillFailure {
+                pid: 200,
+                message: "permission denied".to_owned(),
+            }],
+        });
+
+        assert!(state.kill_waiting_refresh_pids.contains(&100));
+        assert!(!state.kill_waiting_refresh_pids.contains(&200));
+        assert!(!state.kill_in_flight_pids.contains(&100));
+        assert!(!state.kill_in_flight_pids.contains(&200));
+
+        assert_eq!(
+            command_rx.try_recv().unwrap(),
+            CollectionCommand::UpdateRequest(CollectionRequest {
+                scope: PortQueryScope::ListenOnly,
+                request_id: 7,
+            })
+        );
+
+        let toasts = state.toast_views();
+        assert_eq!(toasts.len(), 1);
+        assert_eq!(toasts[0].level, ToastLevel::Success);
+        assert_eq!(toasts[0].message, "Killed 1 process(es), 1 failed");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_system_processes_are_not_killable_in_batch() {
+        assert!(!is_killable_process(&test_process(
+            4,
+            "System",
+            "System",
+            "services.exe",
+        )));
+        assert!(!is_killable_process(&test_process(
+            120,
+            "svchost.exe",
+            "C:\\Windows\\System32\\svchost.exe -k LocalService",
+            "services.exe",
+        )));
+        assert!(is_killable_process(&test_process(
+            4321,
+            "node.exe",
+            "node server.js",
+            "powershell.exe",
+        )));
+    }
+
+    fn test_process(pid: u32, name: &str, command: &str, launcher: &str) -> ProcessSummary {
+        ProcessSummary {
+            pid,
+            name: name.to_owned(),
+            command: command.to_owned(),
+            ports: Vec::new(),
+            launcher: launcher.to_owned(),
+            uptime: Duration::ZERO,
+            cpu_percent: 0.0,
+            memory_usage: 0,
+        }
     }
 
     #[cfg(test)]

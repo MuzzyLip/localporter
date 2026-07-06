@@ -17,6 +17,10 @@ pub struct MainScreen {
     expanded_rows: HashSet<RowKey>,
 }
 
+pub enum MainScreenAction {
+    KillProcess(u32),
+}
+
 impl Default for MainScreen {
     fn default() -> Self {
         Self {
@@ -27,13 +31,17 @@ impl Default for MainScreen {
 }
 
 impl MainScreen {
-    pub fn ui(&mut self, ui: &mut eframe::egui::Ui, state: &mut AppState) {
+    pub fn ui(
+        &mut self,
+        ui: &mut eframe::egui::Ui,
+        state: &mut AppState,
+    ) -> Option<MainScreenAction> {
         let Some(snapshot) = &state.snapshot else {
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
                 ui.label("Waiting for first snapshot...");
             });
-            return;
+            return None;
         };
         let uptime_offset = state.elapsed_since_collection();
 
@@ -108,9 +116,9 @@ impl MainScreen {
             }
         });
 
-        if let Some(ProcessPanelAction::KillProcess(pid)) = kill_request {
-            state.kill_process(pid);
-        }
+        kill_request.map(|action| match action {
+            ProcessPanelAction::KillProcess(pid) => MainScreenAction::KillProcess(pid),
+        })
     }
 
     fn should_show_process(
