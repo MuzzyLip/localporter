@@ -11,12 +11,14 @@ use crate::windows::constants::{
 pub fn standalone_native_options() -> NativeOptions {
     NativeOptions {
         viewport: ViewportBuilder::default()
+            .with_app_id(APP_NAME)
             .with_title(APP_NAME)
             .with_inner_size(Vec2::new(DEFAULT_WIDTH, DEFAULT_HEIGHT))
             .with_min_inner_size(Vec2::new(MIN_WIDTH, MIN_HEIGHT))
             .with_resizable(WINDOWS_RESIZEABLE)
             .with_decorations(WINDOWS_DECORATED)
             .with_transparent(true),
+        centered: true,
         ..Default::default()
     }
 }
