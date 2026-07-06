@@ -3,7 +3,9 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::{
-    components::TitleBar, screens::MainScreen, state::AppState,
+    components::{TitleBar, ToastOverlay},
+    screens::MainScreen,
+    state::AppState,
     windows::constants::WINDOW_CORNER_RADIUS,
 };
 
@@ -11,6 +13,7 @@ pub struct StandaloneApp {
     state: AppState,
     title_bar: TitleBar,
     main_screen: MainScreen,
+    toast_overlay: ToastOverlay,
 }
 
 const WINDOW_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(251, 251, 251);
@@ -28,6 +31,7 @@ impl StandaloneApp {
             state: AppState::new(cc.egui_ctx.clone()),
             title_bar: TitleBar,
             main_screen: MainScreen::default(),
+            toast_overlay: ToastOverlay,
         }
     }
 }
@@ -35,6 +39,7 @@ impl StandaloneApp {
 impl eframe::App for StandaloneApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         self.state.drain_updates();
+        let toasts = self.state.toast_views();
         ui.ctx().request_repaint_after(Duration::from_secs(1));
         let maximized = ui
             .ctx()
@@ -60,7 +65,7 @@ impl eframe::App for StandaloneApp {
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
                     ui.set_min_size(content_rect.size());
-                    self.main_screen.ui(ui, &self.state);
+                    self.main_screen.ui(ui, &mut self.state);
                 });
 
                 ui.painter().rect_stroke(
@@ -70,6 +75,8 @@ impl eframe::App for StandaloneApp {
                     egui::StrokeKind::Middle,
                 );
             });
+
+        self.toast_overlay.show(ui.ctx(), &toasts);
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {

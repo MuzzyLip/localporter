@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub type CimProcessRow = (u32, Option<u32>, String);
+const FIELD_SEPARATOR: char = '\u{1f}';
 
 pub fn parse_net_connection_ports(
     raw: &str,
@@ -75,7 +76,7 @@ pub fn parse_cim_process_info(raw: &str) -> Result<Vec<ProcessInfo>, SourceError
     let mut items = Vec::new();
 
     for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let mut fields = line.splitn(6, '|');
+        let mut fields = line.splitn(8, FIELD_SEPARATOR);
         let pid = fields
             .next()
             .and_then(|value| value.parse::<u32>().ok())
@@ -108,11 +109,21 @@ pub fn parse_cim_process_info(raw: &str) -> Result<Vec<ProcessInfo>, SourceError
             .ok_or(SourceError::InvalidOutput {
                 source: "windows_process_info",
             })?;
+        let command_line = fields
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let executable_path = fields
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         items.push(ProcessInfo {
             pid,
             ppid,
             name,
+            command_line: command_line.map(str::to_owned),
+            executable_path: executable_path.map(str::to_owned),
             uptime: Some(uptime),
             cpu_percent: Some(cpu_percent),
             memory_bytes: Some(memory_bytes),
@@ -238,13 +249,21 @@ mod tests {
 
     #[test]
     fn parses_windows_process_info_rows() {
-        let raw = "1234|567|node.exe|42|1048576|3.5\n";
+        let raw = "1234\u{1f}567\u{1f}node.exe\u{1f}42\u{1f}1048576\u{1f}3.5\u{1f}\"C:\\Program Files\\nodejs\\node.exe\" server.js\u{1f}C:\\Program Files\\nodejs\\node.exe\n";
         let items = parse_cim_process_info(raw).unwrap();
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].pid, 1234);
         assert_eq!(items[0].ppid, Some(567));
         assert_eq!(items[0].name, "node.exe");
+        assert_eq!(
+            items[0].command_line.as_deref(),
+            Some("\"C:\\Program Files\\nodejs\\node.exe\" server.js")
+        );
+        assert_eq!(
+            items[0].executable_path.as_deref(),
+            Some("C:\\Program Files\\nodejs\\node.exe")
+        );
         assert_eq!(items[0].uptime, Some(Duration::from_secs(42)));
         assert_eq!(items[0].memory_bytes, Some(1_048_576));
         assert_eq!(items[0].cpu_percent, Some(3.5));

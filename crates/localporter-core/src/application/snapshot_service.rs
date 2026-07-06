@@ -132,7 +132,9 @@ impl SnapshotService {
                 .to_owned();
 
             items.push(ProcessSummary {
+                pid,
                 name,
+                command: resolve_command(info, binding_name),
                 ports,
                 launcher: origin.resolved_name_or_unknown().to_owned(),
                 uptime: info.and_then(|info| info.uptime).unwrap_or(Duration::ZERO),
@@ -147,6 +149,13 @@ impl SnapshotService {
             warnings,
         }
     }
+}
+
+fn resolve_command(info: Option<&crate::sources::ProcessInfo>, fallback_name: &str) -> String {
+    info.and_then(|info| info.command_line.as_deref())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_name)
+        .to_owned()
 }
 
 fn dedup_ports(mut ports: Vec<BoundPort>) -> Vec<BoundPort> {
@@ -244,6 +253,8 @@ mod tests {
                     pid: pids[0],
                     ppid: Some(42),
                     name: "app.exe".to_owned(),
+                    command_line: Some("C:\\app\\app.exe --serve".to_owned()),
+                    executable_path: Some("C:\\app\\app.exe".to_owned()),
                     uptime: Some(Duration::from_secs(30)),
                     cpu_percent: Some(1.5),
                     memory_bytes: Some(2048),
@@ -289,6 +300,8 @@ mod tests {
         assert_eq!(snapshot.items.len(), 1);
         assert!(elapsed < Duration::from_millis(450), "elapsed: {elapsed:?}");
         assert_eq!(snapshot.items[0].launcher, "explorer.exe");
+        assert_eq!(snapshot.items[0].pid, 1234);
+        assert_eq!(snapshot.items[0].command, "C:\\app\\app.exe --serve");
         assert_eq!(snapshot.items[0].ports[0].port, 3000);
     }
 }

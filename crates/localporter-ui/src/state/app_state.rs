@@ -6,11 +6,11 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use eframe::egui;
-use localporter_core::adapter::macos::command::StdCommandRunner;
+use localporter_core::adapter::macos::command::{CommandRunner, StdCommandRunner};
 #[cfg(target_os = "macos")]
 use localporter_core::adapter::macos::command::{
     LsofPortSource, PsParentChainSource, PsProcessInfoSource,
@@ -22,13 +22,21 @@ use localporter_core::adapter::windows::command::{
 use localporter_core::{PortQueryScope, ProcessSnapshot, SnapshotService};
 
 const SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const TOAST_DURATION: Duration = Duration::from_secs(4);
+const MAX_TOASTS: usize = 3;
 
 pub struct AppState {
     pub show_all_enabled: bool,
     pub snapshot: Option<ProcessSnapshot>,
-    scope_version: u64,
+    ctx: egui::Context,
+    request_id: u64,
+    next_toast_id: u64,
+    toasts: Vec<ToastNotification>,
+    kill_in_flight_pids: HashSet<u32>,
+    kill_waiting_refresh_pids: HashSet<u32>,
     command_tx: mpsc::Sender<CollectionCommand>,
-    snapshot_rx: mpsc::Receiver<SnapshotUpdate>,
+    update_tx: mpsc::Sender<AppUpdate>,
+    update_rx: mpsc::Receiver<AppUpdate>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,68 +47,110 @@ enum CollectionCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CollectionRequest {
     scope: PortQueryScope,
-    version: u64,
+    request_id: u64,
 }
 
 #[derive(Debug)]
 struct SnapshotUpdate {
-    version: u64,
+    request_id: u64,
     snapshot: ProcessSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastLevel {
+    Success,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToastView {
+    pub id: u64,
+    pub level: ToastLevel,
+    pub message: String,
+}
+
+#[derive(Debug)]
+struct ToastNotification {
+    id: u64,
+    level: ToastLevel,
+    message: String,
+    expires_at: Instant,
+}
+
+#[derive(Debug)]
+struct ToastUpdate {
+    level: ToastLevel,
+    message: String,
+}
+
+#[derive(Debug)]
+struct KillUpdate {
+    pid: u32,
+    outcome: Result<(), String>,
+}
+
+#[derive(Debug)]
+enum AppUpdate {
+    Snapshot(SnapshotUpdate),
+    Toast(ToastUpdate),
+    KillFinished(KillUpdate),
 }
 
 impl AppState {
     pub fn new(ctx: egui::Context) -> Self {
         let initial_request = CollectionRequest {
             scope: PortQueryScope::ListenOnly,
-            version: 0,
+            request_id: 0,
         };
-        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
+        let worker_update_tx = update_tx.clone();
         let (command_tx, command_rx) = mpsc::channel();
         let (completed_tx, completed_rx) = mpsc::channel();
+        let worker_ctx = ctx.clone();
 
         thread::spawn(move || {
             let service = Arc::new(build_snapshot_service());
-            let current_version = Arc::new(AtomicU64::new(initial_request.version));
+            let current_request_id = Arc::new(AtomicU64::new(initial_request.request_id));
             let mut request = initial_request;
-            let mut active_versions = HashSet::new();
+            let mut active_request_ids = HashSet::new();
 
             spawn_collection(
                 service.clone(),
-                snapshot_tx.clone(),
+                worker_update_tx.clone(),
                 completed_tx.clone(),
-                ctx.clone(),
-                current_version.clone(),
+                worker_ctx.clone(),
+                current_request_id.clone(),
                 request,
             );
-            active_versions.insert(request.version);
+            active_request_ids.insert(request.request_id);
 
             loop {
-                while let Ok(completed_version) = completed_rx.try_recv() {
-                    active_versions.remove(&completed_version);
+                while let Ok(completed_request_id) = completed_rx.try_recv() {
+                    active_request_ids.remove(&completed_request_id);
                 }
                 match command_rx.recv_timeout(SNAPSHOT_POLL_INTERVAL) {
                     Ok(CollectionCommand::UpdateRequest(next_request)) => {
                         request = next_request;
-                        current_version.store(request.version, Ordering::Relaxed);
-                        if active_versions.insert(request.version) {
+                        current_request_id.store(request.request_id, Ordering::Relaxed);
+                        if active_request_ids.insert(request.request_id) {
                             spawn_collection(
                                 service.clone(),
-                                snapshot_tx.clone(),
+                                worker_update_tx.clone(),
                                 completed_tx.clone(),
-                                ctx.clone(),
-                                current_version.clone(),
+                                worker_ctx.clone(),
+                                current_request_id.clone(),
                                 request,
                             );
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if active_versions.insert(request.version) {
+                        if active_request_ids.insert(request.request_id) {
                             spawn_collection(
                                 service.clone(),
-                                snapshot_tx.clone(),
+                                worker_update_tx.clone(),
                                 completed_tx.clone(),
-                                ctx.clone(),
-                                current_version.clone(),
+                                worker_ctx.clone(),
+                                current_request_id.clone(),
                                 request,
                             );
                         }
@@ -113,9 +163,15 @@ impl AppState {
         Self {
             show_all_enabled: false,
             snapshot: None,
-            scope_version: 0,
+            ctx,
+            request_id: 0,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::new(),
+            kill_waiting_refresh_pids: HashSet::new(),
             command_tx,
-            snapshot_rx,
+            update_tx,
+            update_rx,
         }
     }
 
@@ -125,15 +181,12 @@ impl AppState {
         }
 
         self.show_all_enabled = enabled;
-        self.scope_version = self.scope_version.saturating_add(1);
-        self.sync_collection_scope();
+        self.request_collection();
     }
 
-    fn sync_collection_scope(&mut self) {
-        let request = CollectionRequest {
-            scope: self.port_query_scope(),
-            version: self.scope_version,
-        };
+    fn request_collection(&mut self) {
+        self.request_id = self.request_id.saturating_add(1);
+        let request = self.current_request();
         let _ = self
             .command_tx
             .send(CollectionCommand::UpdateRequest(request));
@@ -142,15 +195,49 @@ impl AppState {
     pub fn drain_updates(&mut self) {
         let mut latest_snapshot = None;
 
-        while let Ok(update) = self.snapshot_rx.try_recv() {
-            if update.version == self.scope_version {
-                latest_snapshot = Some(update.snapshot);
+        while let Ok(update) = self.update_rx.try_recv() {
+            match update {
+                AppUpdate::Snapshot(snapshot) if snapshot.request_id == self.request_id => {
+                    latest_snapshot = Some(snapshot.snapshot);
+                }
+                AppUpdate::Snapshot(_) => {}
+                AppUpdate::Toast(toast) => self.push_toast(toast),
+                AppUpdate::KillFinished(kill) => self.handle_kill_update(kill),
             }
         }
 
         if let Some(snapshot) = latest_snapshot {
             self.snapshot = Some(snapshot);
+            self.kill_waiting_refresh_pids.clear();
         }
+
+        self.retain_active_toasts();
+    }
+
+    pub fn kill_process(&mut self, pid: u32) {
+        if self.is_kill_pending(pid) {
+            return;
+        }
+
+        self.kill_in_flight_pids.insert(pid);
+        self.request_id = self.request_id.saturating_add(1);
+        let update_tx = self.update_tx.clone();
+        let ctx = self.ctx.clone();
+        self.ctx.request_repaint();
+
+        thread::spawn(move || {
+            let outcome = match kill_process_by_pid(pid) {
+                Ok(()) => Ok(()),
+                Err(error) => Err(format_source_error(&error)),
+            };
+
+            let _ = update_tx.send(AppUpdate::KillFinished(KillUpdate { pid, outcome }));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn is_kill_pending(&self, pid: u32) -> bool {
+        self.kill_in_flight_pids.contains(&pid) || self.kill_waiting_refresh_pids.contains(&pid)
     }
 
     pub fn elapsed_since_collection(&self) -> Duration {
@@ -160,6 +247,18 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    pub fn toast_views(&mut self) -> Vec<ToastView> {
+        self.retain_active_toasts();
+        self.toasts
+            .iter()
+            .map(|toast| ToastView {
+                id: toast.id,
+                level: toast.level,
+                message: toast.message.clone(),
+            })
+            .collect()
+    }
+
     fn port_query_scope(&self) -> PortQueryScope {
         if self.show_all_enabled {
             PortQueryScope::AllTcp
@@ -167,32 +266,85 @@ impl AppState {
             PortQueryScope::ListenOnly
         }
     }
+
+    fn current_request(&self) -> CollectionRequest {
+        CollectionRequest {
+            scope: self.port_query_scope(),
+            request_id: self.request_id,
+        }
+    }
+
+    fn push_toast(&mut self, toast: ToastUpdate) {
+        self.toasts.push(ToastNotification {
+            id: self.next_toast_id,
+            level: toast.level,
+            message: toast.message,
+            expires_at: Instant::now() + TOAST_DURATION,
+        });
+        self.next_toast_id = self.next_toast_id.saturating_add(1);
+
+        if self.toasts.len() > MAX_TOASTS {
+            let overflow = self.toasts.len() - MAX_TOASTS;
+            self.toasts.drain(0..overflow);
+        }
+    }
+
+    fn retain_active_toasts(&mut self) {
+        let now = Instant::now();
+        self.toasts.retain(|toast| toast.expires_at > now);
+    }
+
+    fn handle_kill_update(&mut self, kill: KillUpdate) {
+        self.kill_in_flight_pids.remove(&kill.pid);
+
+        match kill.outcome {
+            Ok(()) => {
+                self.kill_waiting_refresh_pids.insert(kill.pid);
+                let _ = self.update_tx.send(AppUpdate::Toast(ToastUpdate {
+                    level: ToastLevel::Success,
+                    message: format!("Killed PID {}", kill.pid),
+                }));
+                let _ = self
+                    .command_tx
+                    .send(CollectionCommand::UpdateRequest(self.current_request()));
+            }
+            Err(message) => {
+                self.kill_waiting_refresh_pids.remove(&kill.pid);
+                let _ = self.update_tx.send(AppUpdate::Toast(ToastUpdate {
+                    level: ToastLevel::Error,
+                    message: format!("Failed to kill PID {}: {message}", kill.pid),
+                }));
+            }
+        }
+
+        self.ctx.request_repaint();
+    }
 }
 
 fn spawn_collection(
     service: Arc<SnapshotService>,
-    snapshot_tx: mpsc::Sender<SnapshotUpdate>,
+    update_tx: mpsc::Sender<AppUpdate>,
     completed_tx: mpsc::Sender<u64>,
     ctx: egui::Context,
-    current_version: Arc<AtomicU64>,
+    current_request_id: Arc<AtomicU64>,
     request: CollectionRequest,
 ) {
     thread::spawn(move || {
         let snapshot = service.collect_snapshot(request.scope);
-        let is_current = current_version.load(Ordering::Relaxed) == request.version;
+        let is_current = current_request_id.load(Ordering::Relaxed) == request.request_id;
 
         if is_current
-            && snapshot_tx
-                .send(SnapshotUpdate {
-                    version: request.version,
+            && update_tx
+                .send(AppUpdate::Snapshot(SnapshotUpdate {
+                    request_id: request.request_id,
                     snapshot,
-                })
+                }))
                 .is_ok()
         {
             ctx.request_repaint();
         }
 
-        let _ = completed_tx.send(request.version);
+        let _ = completed_tx.send(request.request_id);
     });
 }
 
@@ -220,6 +372,45 @@ fn elapsed_since(collected_at: SystemTime, now: SystemTime) -> Duration {
     now.duration_since(collected_at).unwrap_or_default()
 }
 
+fn kill_process_by_pid(pid: u32) -> Result<(), localporter_core::SourceError> {
+    let runner = StdCommandRunner;
+    let pid_arg = pid.to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        runner.run("taskkill", &["/PID", &pid_arg, "/T", "/F"])?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        runner.run("kill", &["-9", &pid_arg])?;
+    }
+
+    Ok(())
+}
+
+fn format_source_error(error: &localporter_core::SourceError) -> String {
+    match error {
+        localporter_core::SourceError::CommandNotFound { program } => {
+            format!("{program} not found")
+        }
+        localporter_core::SourceError::CommandFailed { program, stderr } => {
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                format!("{program} failed")
+            } else {
+                stderr.to_owned()
+            }
+        }
+        localporter_core::SourceError::PermissionDenied { program } => {
+            format!("permission denied for {program}")
+        }
+        localporter_core::SourceError::InvalidOutput { source } => {
+            format!("invalid output from {source}")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,26 +433,32 @@ mod tests {
 
     #[test]
     fn latest_request_prefers_most_recent_scope_change() {
-        let (_snapshot_tx, snapshot_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
         let (command_tx, _command_rx) = mpsc::channel();
 
         let mut state = AppState {
             show_all_enabled: false,
             snapshot: None,
-            scope_version: 0,
+            ctx: egui::Context::default(),
+            request_id: 0,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::new(),
+            kill_waiting_refresh_pids: HashSet::new(),
             command_tx,
-            snapshot_rx,
+            update_tx,
+            update_rx,
         };
 
         state.set_show_all_enabled(true);
         state.set_show_all_enabled(false);
-        assert_eq!(state.scope_version, 2);
+        assert_eq!(state.request_id, 2);
         assert!(!state.show_all_enabled);
     }
 
     #[test]
     fn drain_updates_ignores_stale_snapshots() {
-        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
         let (command_tx, _command_rx) = mpsc::channel();
 
         let stale_snapshot = ProcessSnapshot {
@@ -275,25 +472,31 @@ mod tests {
             warnings: Vec::new(),
         };
 
-        snapshot_tx
-            .send(SnapshotUpdate {
-                version: 0,
+        update_tx
+            .send(AppUpdate::Snapshot(SnapshotUpdate {
+                request_id: 0,
                 snapshot: stale_snapshot,
-            })
+            }))
             .unwrap();
-        snapshot_tx
-            .send(SnapshotUpdate {
-                version: 1,
+        update_tx
+            .send(AppUpdate::Snapshot(SnapshotUpdate {
+                request_id: 1,
                 snapshot: fresh_snapshot.clone(),
-            })
+            }))
             .unwrap();
 
         let mut state = AppState {
             show_all_enabled: true,
             snapshot: None,
-            scope_version: 1,
+            ctx: egui::Context::default(),
+            request_id: 1,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::new(),
+            kill_waiting_refresh_pids: HashSet::new(),
             command_tx,
-            snapshot_rx,
+            update_tx,
+            update_rx,
         };
         state.drain_updates();
 
@@ -302,7 +505,7 @@ mod tests {
 
     #[test]
     fn spawn_collection_skips_stale_snapshots() {
-        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        let (update_tx, update_rx) = mpsc::channel();
         let (completed_tx, completed_rx) = mpsc::channel();
         let current_version = Arc::new(AtomicU64::new(1));
         let service = Arc::new(build_test_snapshot_service());
@@ -310,18 +513,80 @@ mod tests {
 
         spawn_collection(
             service,
-            snapshot_tx,
+            update_tx,
             completed_tx,
             ctx,
             current_version,
             CollectionRequest {
                 scope: PortQueryScope::ListenOnly,
-                version: 0,
+                request_id: 0,
             },
         );
 
         assert_eq!(completed_rx.recv().unwrap(), 0);
-        assert!(snapshot_rx.try_recv().is_err());
+        assert!(update_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn toast_views_drop_expired_items() {
+        let (update_tx, update_rx) = mpsc::channel();
+        let (command_tx, _command_rx) = mpsc::channel();
+
+        let mut state = AppState {
+            show_all_enabled: false,
+            snapshot: None,
+            ctx: egui::Context::default(),
+            request_id: 0,
+            next_toast_id: 1,
+            toasts: vec![ToastNotification {
+                id: 0,
+                level: ToastLevel::Success,
+                message: "stale".to_owned(),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            }],
+            kill_in_flight_pids: HashSet::new(),
+            kill_waiting_refresh_pids: HashSet::new(),
+            command_tx,
+            update_tx,
+            update_rx,
+        };
+
+        assert!(state.toast_views().is_empty());
+    }
+
+    #[test]
+    fn fresh_snapshot_clears_pending_kill_guard() {
+        let (update_tx, update_rx) = mpsc::channel();
+        let (command_tx, _command_rx) = mpsc::channel();
+
+        update_tx
+            .send(AppUpdate::Snapshot(SnapshotUpdate {
+                request_id: 1,
+                snapshot: ProcessSnapshot {
+                    collected_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+                    items: Vec::new(),
+                    warnings: Vec::new(),
+                },
+            }))
+            .unwrap();
+
+        let mut state = AppState {
+            show_all_enabled: false,
+            snapshot: None,
+            ctx: egui::Context::default(),
+            request_id: 1,
+            next_toast_id: 0,
+            toasts: Vec::new(),
+            kill_in_flight_pids: HashSet::new(),
+            kill_waiting_refresh_pids: HashSet::from([42]),
+            command_tx,
+            update_tx,
+            update_rx,
+        };
+
+        state.drain_updates();
+
+        assert!(!state.is_kill_pending(42));
     }
 
     #[cfg(test)]

@@ -7,6 +7,8 @@ pub struct ProcessInfo {
     pub pid: u32,
     pub ppid: Option<u32>,
     pub name: String,
+    pub command_line: Option<String>,
+    pub executable_path: Option<String>,
     pub uptime: Option<Duration>,
     pub cpu_percent: Option<f32>,
     pub memory_bytes: Option<u64>,

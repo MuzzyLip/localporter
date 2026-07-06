@@ -67,6 +67,8 @@ pub fn parse_ps_process_info(raw: &str) -> Result<Vec<ProcessInfo>, SourceError>
             })?,
             ppid: parse_optional_pid(ppid),
             name: extract_process_name(command),
+            command_line: (!command.is_empty()).then(|| command.to_owned()),
+            executable_path: extract_executable_path(command),
             uptime: parse_etime(etime),
             cpu_percent: cpu.parse::<f32>().ok(),
             memory_bytes: rss.parse::<u64>().ok().map(|value| value * 1024),
@@ -164,6 +166,26 @@ fn extract_process_name(command: &str) -> String {
         .to_owned()
 }
 
+fn extract_executable_path(command: &str) -> Option<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+
+    if let Some((prefix, rest)) = command.split_once(".app/Contents/MacOS/") {
+        let executable = rest.split_whitespace().next().unwrap_or(rest);
+        return Some(format!("{prefix}.app/Contents/MacOS/{executable}"));
+    }
+
+    let token = if let Some(rest) = command.strip_prefix('"') {
+        rest.split_once('"').map(|(path, _)| path).unwrap_or(rest)
+    } else {
+        command.split_whitespace().next().unwrap_or(command)
+    };
+
+    token.contains('/').then(|| token.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +224,14 @@ mod tests {
         assert_eq!(items[0].pid, 29220);
         assert_eq!(items[0].ppid, Some(28785));
         assert_eq!(items[0].name, "Code");
+        assert_eq!(
+            items[0].command_line.as_deref(),
+            Some("/Applications/Visual Studio Code.app/Contents/MacOS/Code --type=renderer")
+        );
+        assert_eq!(
+            items[0].executable_path.as_deref(),
+            Some("/Applications/Visual Studio Code.app/Contents/MacOS/Code")
+        );
         assert_eq!(items[0].memory_bytes, Some(32_833_536));
     }
 

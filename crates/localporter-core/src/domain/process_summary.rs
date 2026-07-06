@@ -4,7 +4,9 @@ use crate::domain::{BoundPort, PortProtocol};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessSummary {
+    pub pid: u32,
     pub name: String,
+    pub command: String,
     pub ports: Vec<BoundPort>,
     pub launcher: String,
     pub uptime: Duration,
@@ -19,14 +21,6 @@ impl ProcessSummary {
         } else {
             &self.name
         }
-    }
-
-    pub fn primary_port(&self) -> Option<BoundPort> {
-        self.ports.first().copied()
-    }
-
-    pub fn remaining_port_count(&self) -> usize {
-        self.ports.len().saturating_sub(1)
     }
 
     pub fn tcp_ports(&self) -> Vec<u16> {
@@ -54,7 +48,9 @@ mod tests {
 
     fn summary_with_ports(ports: Vec<BoundPort>) -> ProcessSummary {
         ProcessSummary {
+            pid: 1234,
             name: "demo".to_owned(),
+            command: "demo".to_owned(),
             ports,
             launcher: "Terminal".to_owned(),
             uptime: Duration::ZERO,
@@ -64,32 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn primary_port_returns_none_when_no_ports_exist() {
-        let summary = summary_with_ports(Vec::new());
-
-        assert_eq!(summary.remaining_port_count(), 0);
-        assert_eq!(summary.primary_port(), None);
-    }
-
-    #[test]
-    fn primary_port_returns_single_port() {
-        let summary = summary_with_ports(vec![BoundPort {
-            protocol: PortProtocol::Tcp,
-            port: 3000,
-        }]);
-
-        assert_eq!(
-            summary.primary_port(),
-            Some(BoundPort {
-                protocol: PortProtocol::Tcp,
-                port: 3000,
-            })
-        );
-        assert_eq!(summary.remaining_port_count(), 0);
-    }
-
-    #[test]
-    fn remaining_port_count_excludes_primary_port() {
+    fn tcp_ports_only_include_tcp_bindings() {
         let summary = summary_with_ports(vec![
             BoundPort {
                 protocol: PortProtocol::Tcp,
@@ -105,6 +76,26 @@ mod tests {
             },
         ]);
 
-        assert_eq!(summary.remaining_port_count(), 2);
+        assert_eq!(summary.tcp_ports(), vec![3000, 9229]);
+    }
+
+    #[test]
+    fn udp_ports_only_include_udp_bindings() {
+        let summary = summary_with_ports(vec![
+            BoundPort {
+                protocol: PortProtocol::Tcp,
+                port: 3000,
+            },
+            BoundPort {
+                protocol: PortProtocol::Udp,
+                port: 5353,
+            },
+            BoundPort {
+                protocol: PortProtocol::Udp,
+                port: 5354,
+            },
+        ]);
+
+        assert_eq!(summary.udp_ports(), vec![5353, 5354]);
     }
 }

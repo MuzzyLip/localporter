@@ -26,6 +26,7 @@ impl ProcessInfoSource for CimProcessInfoSource {
         let perf_filter = build_or_filter("IDProcess", pids);
         let script = format!(
             concat!(
+                "$sep = [char]31; ",
                 "$cpuByPid = @{{}}; ",
                 "Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter \"{perf_filter}\" | ",
                 "ForEach-Object {{ $cpuByPid[[uint32]$_.IDProcess] = [single]$_.PercentProcessorTime }}; ",
@@ -33,7 +34,11 @@ impl ProcessInfoSource for CimProcessInfoSource {
                 "ForEach-Object {{ ",
                 "$uptime = [math]::Max([int64]((New-TimeSpan -Start $_.CreationDate -End (Get-Date)).TotalSeconds), 0); ",
                 "$cpu = if ($cpuByPid.ContainsKey([uint32]$_.ProcessId)) {{ $cpuByPid[[uint32]$_.ProcessId] }} else {{ 0 }}; ",
-                "\"$($_.ProcessId)|$($_.ParentProcessId)|$($_.Name)|$uptime|$($_.WorkingSetSize)|$cpu\" ",
+                "$command = if ($null -ne $_.CommandLine) {{ $_.CommandLine }} else {{ '' }}; ",
+                "$path = if ($null -ne $_.ExecutablePath) {{ $_.ExecutablePath }} else {{ '' }}; ",
+                "$command = $command -replace [char]31, ' '; ",
+                "$path = $path -replace [char]31, ' '; ",
+                "\"$($_.ProcessId)$sep$($_.ParentProcessId)$sep$($_.Name)$sep$uptime$sep$($_.WorkingSetSize)$sep$cpu$sep$command$sep$path\" ",
                 "}}"
             ),
             perf_filter = perf_filter,
