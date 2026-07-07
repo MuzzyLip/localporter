@@ -1,5 +1,7 @@
 use eframe::{CreationContext, egui};
-use localporter_core::{log_error, log_info};
+#[cfg(target_os = "macos")]
+use localporter_core::log_error;
+use localporter_core::log_info;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMode {

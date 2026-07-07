@@ -1,5 +1,8 @@
 use std::{env, fmt, fs, io, path::PathBuf, time::Duration};
 
+#[cfg(target_os = "windows")]
+use std::process::Command;
+
 use localporter_core::{log_debug, log_error, log_info, log_warn};
 
 const SETTINGS_FILE_NAME: &str = "settings.conf";

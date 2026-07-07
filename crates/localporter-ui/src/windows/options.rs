@@ -1,7 +1,10 @@
 use eframe::{
     NativeOptions,
-    egui::{Vec2, ViewportBuilder, WindowLevel},
+    egui::{Vec2, ViewportBuilder},
 };
+
+#[cfg(target_os = "macos")]
+use eframe::egui::WindowLevel;
 
 use crate::windows::constants::{
     APP_NAME, DEFAULT_HEIGHT, DEFAULT_WIDTH, MIN_HEIGHT, MIN_WIDTH, WINDOWS_DECORATED,
