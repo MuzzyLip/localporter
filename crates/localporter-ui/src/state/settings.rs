@@ -1,5 +1,7 @@
 use std::{env, fmt, fs, io, path::PathBuf, time::Duration};
 
+use localporter_core::{log_debug, log_error, log_info, log_warn};
+
 const SETTINGS_FILE_NAME: &str = "settings.conf";
 const SETTINGS_DIR_NAME: &str = "LocalPorter";
 
@@ -125,10 +127,12 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn load() -> Self {
         let Some(path) = settings_file_path() else {
+            log_warn!("settings path unavailable, using defaults");
             return Self::default();
         };
 
         let Ok(contents) = fs::read_to_string(path) else {
+            log_debug!("settings file missing or unreadable, using defaults");
             return Self::default();
         };
 
@@ -157,11 +161,18 @@ impl AppSettings {
             }
         }
 
+        log_debug!(
+            "settings loaded: refresh_interval={}s kill_behavior={} launch_at_startup={}",
+            settings.refresh_interval.seconds(),
+            settings.kill_behavior,
+            settings.launch_at_startup
+        );
         settings
     }
 
     pub fn save(&self) -> io::Result<()> {
         let Some(path) = settings_file_path() else {
+            log_error!("failed to save settings: settings path unavailable");
             return Err(io::Error::other("settings path unavailable"));
         };
 
@@ -175,7 +186,9 @@ impl AppSettings {
             self.kill_behavior,
             self.launch_at_startup
         );
-        fs::write(path, contents)
+        fs::write(&path, contents)?;
+        log_info!("settings saved: path={}", path.display());
+        Ok(())
     }
 }
 
@@ -220,6 +233,10 @@ pub fn write_launch_at_startup(enabled: bool) -> Result<(), String> {
 
 fn settings_file_path() -> Option<PathBuf> {
     settings_dir_path().map(|dir| dir.join(SETTINGS_FILE_NAME))
+}
+
+pub(crate) fn logs_dir_path() -> Option<PathBuf> {
+    settings_dir_path().map(|dir| dir.join("logs"))
 }
 
 fn settings_dir_path() -> Option<PathBuf> {

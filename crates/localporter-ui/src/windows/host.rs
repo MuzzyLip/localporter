@@ -1,4 +1,5 @@
 use eframe::{CreationContext, egui};
+use localporter_core::{log_error, log_info};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMode {
@@ -18,6 +19,7 @@ impl WindowHost {
             let macos_menu_bar = match super::macos::MacOsMenuBarHost::new(&cc.egui_ctx) {
                 Ok(host) => Some(host),
                 Err(error) => {
+                    log_error!("failed to initialize macOS menu bar host: {error}");
                     eprintln!("failed to initialize macOS menu bar host: {error}");
                     cc.egui_ctx
                         .send_viewport_cmd(egui::ViewportCommand::Visible(true));
@@ -70,6 +72,7 @@ impl WindowHost {
     }
 
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        log_info!("application quit requested");
         #[cfg(target_os = "macos")]
         if let Some(host) = self.macos_menu_bar.as_mut() {
             host.request_quit(ctx);

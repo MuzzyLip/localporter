@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{self, Pos2, ViewportCommand, pos2, vec2};
+use localporter_core::{log_debug, log_info};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSScreen};
 use tray_icon::{
@@ -95,6 +96,7 @@ impl MacOsMenuBarHost {
             state,
         };
 
+        log_info!("macOS menu bar host initialized");
         host.show_standalone(ctx);
 
         Ok(host)
@@ -107,6 +109,7 @@ impl MacOsMenuBarHost {
     }
 
     pub fn request_quit(&mut self, ctx: &egui::Context) {
+        log_info!("quitting application from menu bar panel");
         {
             let mut state = self.state.lock().expect("panel state lock poisoned");
             state.allow_app_quit = true;
@@ -214,6 +217,7 @@ impl MacOsMenuBarHost {
         state.panel_visible = true;
         state.last_focused = None;
         state.window_mode = MacOsWindowMode::Standalone;
+        log_info!("window mode changed: standalone visible=true");
     }
 
     fn hide_panel(&self, ctx: &egui::Context) {
@@ -240,6 +244,7 @@ fn handle_tray_event(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>, event:
             }
 
             if button == MouseButton::Left && button_state == MouseButtonState::Up {
+                log_debug!("tray icon clicked: left button up");
                 toggle_panel(ctx, state, Some(rect));
             } else {
                 ctx.request_repaint();
@@ -261,8 +266,10 @@ fn toggle_panel(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>, tray_rect: 
     };
 
     if visible && window_mode == MacOsWindowMode::MenuBarPanel {
+        log_info!("menu bar panel toggle: hide");
         hide_panel(ctx, state);
     } else {
+        log_info!("menu bar panel toggle: show");
         show_panel(ctx, state, tray_rect);
     }
 }
@@ -287,6 +294,7 @@ fn show_panel(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>, tray_rect: Op
     let mut state = state.lock().expect("panel state lock poisoned");
     state.panel_visible = true;
     state.last_focused = None;
+    log_info!("window mode changed: menu_bar_panel visible=true");
 }
 
 fn hide_panel(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>) {
@@ -296,6 +304,7 @@ fn hide_panel(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>) {
     let mut state = state.lock().expect("panel state lock poisoned");
     state.panel_visible = false;
     state.last_focused = None;
+    log_info!("menu bar panel hidden");
 }
 
 fn panel_origin(tray_rect: Option<TrayRect>, metrics: PanelMetrics) -> Pos2 {

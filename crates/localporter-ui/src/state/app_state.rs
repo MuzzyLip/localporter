@@ -20,6 +20,7 @@ use localporter_core::adapter::windows::command::{
     CimParentChainSource, CimProcessInfoSource, NetConnectionPortSource,
 };
 use localporter_core::{PortQueryScope, ProcessSnapshot, ProcessSummary, SnapshotService};
+use localporter_core::{log_debug, log_error, log_info, log_warn};
 
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
@@ -123,6 +124,13 @@ impl AppState {
             }
         }
 
+        log_info!(
+            "app state initializing: refresh_interval={}s launch_at_startup={} kill_behavior={}",
+            settings.refresh_interval.seconds(),
+            settings.launch_at_startup,
+            settings.kill_behavior
+        );
+
         let initial_request = CollectionRequest {
             scope: PortQueryScope::ListenOnly,
             request_id: 0,
@@ -138,6 +146,7 @@ impl AppState {
         let worker_poll_interval_ms = poll_interval_ms.clone();
 
         thread::spawn(move || {
+            log_info!("collection worker started");
             let service = Arc::new(build_snapshot_service());
             let current_request_id = Arc::new(AtomicU64::new(initial_request.request_id));
             let mut request = initial_request;
@@ -162,6 +171,11 @@ impl AppState {
 
                 match command_rx.recv_timeout(timeout) {
                     Ok(CollectionCommand::UpdateRequest(next_request)) => {
+                        log_debug!(
+                            "collection request updated: request_id={} scope={:?}",
+                            next_request.request_id,
+                            next_request.scope
+                        );
                         request = next_request;
                         current_request_id.store(request.request_id, Ordering::Relaxed);
                         if active_request_ids.insert(request.request_id) {
@@ -177,6 +191,11 @@ impl AppState {
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         if active_request_ids.insert(request.request_id) {
+                            log_debug!(
+                                "collection poll tick: request_id={} scope={:?}",
+                                request.request_id,
+                                request.scope
+                            );
                             spawn_collection(
                                 service.clone(),
                                 worker_update_tx.clone(),
@@ -187,7 +206,10 @@ impl AppState {
                             );
                         }
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        log_info!("collection worker stopped: command channel disconnected");
+                        break;
+                    }
                 }
             }
         });
@@ -215,12 +237,22 @@ impl AppState {
         }
 
         self.show_all_enabled = enabled;
+        log_info!(
+            "port scope changed: show_all_enabled={} scope={:?}",
+            self.show_all_enabled,
+            self.port_query_scope()
+        );
         self.request_collection();
     }
 
     fn request_collection(&mut self) {
         self.request_id = self.request_id.saturating_add(1);
         let request = self.current_request();
+        log_debug!(
+            "queue collection request: request_id={} scope={:?}",
+            request.request_id,
+            request.scope
+        );
         let _ = self
             .command_tx
             .send(CollectionCommand::UpdateRequest(request));
@@ -232,15 +264,32 @@ impl AppState {
         while let Ok(update) = self.update_rx.try_recv() {
             match update {
                 AppUpdate::Snapshot(snapshot) if snapshot.request_id == self.request_id => {
+                    log_debug!(
+                        "received current snapshot update: request_id={} items={} warnings={}",
+                        snapshot.request_id,
+                        snapshot.snapshot.items.len(),
+                        snapshot.snapshot.warnings.len()
+                    );
                     latest_snapshot = Some(snapshot.snapshot);
                 }
-                AppUpdate::Snapshot(_) => {}
+                AppUpdate::Snapshot(snapshot) => {
+                    log_debug!(
+                        "ignored stale snapshot update: request_id={} current_request_id={}",
+                        snapshot.request_id,
+                        self.request_id
+                    );
+                }
                 AppUpdate::KillFinished(kill) => self.handle_kill_update(kill),
                 AppUpdate::KillAllFinished(kill_all) => self.handle_kill_all_update(kill_all),
             }
         }
 
         if let Some(snapshot) = latest_snapshot {
+            log_debug!(
+                "applied snapshot: items={} warnings={}",
+                snapshot.items.len(),
+                snapshot.warnings.len()
+            );
             self.snapshot = Some(snapshot);
             self.kill_waiting_refresh_pids.clear();
         }
@@ -250,11 +299,13 @@ impl AppState {
 
     pub fn kill_process(&mut self, pid: u32) {
         if self.is_kill_pending(pid) {
+            log_debug!("skip kill request for pending pid={pid}");
             return;
         }
 
         self.kill_in_flight_pids.insert(pid);
         self.request_id = self.request_id.saturating_add(1);
+        log_info!("kill requested: pid={pid}");
         let update_tx = self.update_tx.clone();
         let ctx = self.ctx.clone();
         self.ctx.request_repaint();
@@ -278,9 +329,11 @@ impl AppState {
     pub fn kill_processes(&mut self, pids: Vec<u32>) {
         let pids = self.normalize_kill_pids(pids);
         if pids.is_empty() {
+            log_debug!("skip kill-all request because no killable pids remain");
             return;
         }
 
+        log_info!("kill-all requested: pids={:?}", pids);
         for pid in &pids {
             self.kill_in_flight_pids.insert(*pid);
         }
@@ -335,10 +388,21 @@ impl AppState {
         let startup_changed = previous.launch_at_startup != settings.launch_at_startup;
         let mut has_error = false;
 
+        log_info!(
+            "apply settings requested: refresh={}s->{}s launch_at_startup={}->{} kill_behavior={}->{}",
+            previous.refresh_interval.seconds(),
+            settings.refresh_interval.seconds(),
+            previous.launch_at_startup,
+            settings.launch_at_startup,
+            previous.kill_behavior,
+            settings.kill_behavior
+        );
+
         if startup_changed {
             match write_launch_at_startup(settings.launch_at_startup) {
                 Ok(()) => {}
                 Err(message) => {
+                    log_warn!("failed to update launch at startup: {message}");
                     has_error = true;
                     settings.launch_at_startup = previous.launch_at_startup;
                     self.push_toast(ToastUpdate {
@@ -361,11 +425,13 @@ impl AppState {
 
         if settings_changed {
             if let Err(error) = self.settings.save() {
+                log_error!("failed to save settings: {error}");
                 self.push_toast(ToastUpdate {
                     level: ToastLevel::Error,
                     message: format!("Failed to save settings: {error}"),
                 });
             } else if !has_error {
+                log_info!("settings applied successfully");
                 self.push_toast(ToastUpdate {
                     level: ToastLevel::Success,
                     message: "Settings saved".to_owned(),
@@ -543,8 +609,21 @@ fn spawn_collection(
     request: CollectionRequest,
 ) {
     thread::spawn(move || {
+        log_debug!(
+            "collect snapshot start: request_id={} scope={:?}",
+            request.request_id,
+            request.scope
+        );
         let snapshot = service.collect_snapshot(request.scope);
         let is_current = current_request_id.load(Ordering::Relaxed) == request.request_id;
+        log_debug!(
+            "collect snapshot complete: request_id={} scope={:?} items={} warnings={} is_current={}",
+            request.request_id,
+            request.scope,
+            snapshot.items.len(),
+            snapshot.warnings.len(),
+            is_current
+        );
 
         if is_current
             && update_tx
@@ -599,6 +678,7 @@ fn kill_process_by_pid(pid: u32) -> Result<(), localporter_core::SourceError> {
         runner.run("kill", &["-9", &pid_arg])?;
     }
 
+    log_info!("kill command succeeded: pid={pid}");
     Ok(())
 }
 

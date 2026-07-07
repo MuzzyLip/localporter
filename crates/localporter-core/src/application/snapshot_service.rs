@@ -11,6 +11,7 @@ use crate::{
         ProcessSummary,
     },
     error::SourceError,
+    log_debug, log_warn,
     sources::{BoundPortSource, ParentChainSource, ProcessInfoSource},
 };
 
@@ -38,11 +39,17 @@ impl SnapshotService {
     pub fn collect_snapshot(&self, scope: PortQueryScope) -> ProcessSnapshot {
         let collected_at = SystemTime::now();
         let mut warnings = Vec::new();
+        log_debug!("snapshot collection started: scope={scope:?}");
 
         let bindings = match self.port_source.collect_bound_ports(scope) {
             Ok(bindings) => bindings,
             Err(error) => {
+                log_source_error("bound_ports", None, &error);
                 warnings.push(map_source_error("bound_ports", None, error));
+                log_warn!(
+                    "snapshot collection aborted: scope={scope:?} warnings={}",
+                    warnings.len()
+                );
                 return ProcessSnapshot {
                     collected_at,
                     items: Vec::new(),
@@ -69,10 +76,10 @@ impl SnapshotService {
                 let process_task =
                     scope.spawn(|| match self.process_source.collect_process_info(&pids) {
                         Ok(info) => (info, Vec::new()),
-                        Err(error) => (
-                            HashMap::new(),
-                            vec![map_source_error("process_info", None, error)],
-                        ),
+                        Err(error) => (HashMap::new(), {
+                            log_source_error("process_info", None, &error);
+                            vec![map_source_error("process_info", None, error)]
+                        }),
                     });
                 let parent_task = scope.spawn(|| {
                     let mut origins = HashMap::with_capacity(pids.len());
@@ -85,6 +92,7 @@ impl SnapshotService {
                         {
                             Ok(parent_chain) => build_origin(parent_chain),
                             Err(error) => {
+                                log_source_error("parent_chain", Some(pid), &error);
                                 warnings.push(map_source_error("parent_chain", Some(pid), error));
                                 ProcessOrigin::default()
                             }
@@ -143,6 +151,13 @@ impl SnapshotService {
             });
         }
 
+        log_debug!(
+            "snapshot collection finished: scope={scope:?} pids={} items={} warnings={}",
+            pids.len(),
+            items.len(),
+            warnings.len()
+        );
+
         ProcessSnapshot {
             collected_at,
             items,
@@ -191,6 +206,34 @@ fn map_source_error(
         SourceError::InvalidOutput { .. } => CollectionWarning::MalformedOutput { source },
         SourceError::CommandNotFound { .. } | SourceError::CommandFailed { .. } => {
             CollectionWarning::SourceUnavailable { source }
+        }
+    }
+}
+
+fn log_source_error(source: &'static str, pid: Option<u32>, error: &SourceError) {
+    match error {
+        SourceError::CommandNotFound { program } => {
+            log_warn!(
+                "source error: source={source} pid={pid:?} kind=command_not_found program={program}"
+            );
+        }
+        SourceError::CommandFailed { program, stderr } => {
+            log_warn!(
+                "source error: source={source} pid={pid:?} kind=command_failed program={program} stderr={}",
+                stderr.trim()
+            );
+        }
+        SourceError::PermissionDenied { program } => {
+            log_warn!(
+                "source error: source={source} pid={pid:?} kind=permission_denied program={program}"
+            );
+        }
+        SourceError::InvalidOutput {
+            source: invalid_source,
+        } => {
+            log_warn!(
+                "source error: source={source} pid={pid:?} kind=invalid_output invalid_source={invalid_source}"
+            );
         }
     }
 }
