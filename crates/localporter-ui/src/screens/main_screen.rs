@@ -24,6 +24,7 @@ pub struct MainScreenOutput {
 }
 
 pub enum MainScreenAction {
+    OpenInBrowser(u16),
     KillProcess(u32),
 }
 
@@ -54,7 +55,7 @@ impl MainScreen {
         let filter = SearchFilter::parse(search_query);
 
         let mut kill_request = None;
-        let visible_entries = snapshot
+        let mut visible_entries = snapshot
             .items
             .iter()
             .filter(|item| Self::should_show_process(item, state.show_all_enabled))
@@ -64,6 +65,7 @@ impl MainScreen {
                     .map(move |row_key| (item, row_key))
             })
             .collect::<Vec<_>>();
+        Self::sort_visible_entries(&mut visible_entries);
         let visible_row_set = visible_entries
             .iter()
             .map(|(_, row_key)| *row_key)
@@ -116,6 +118,7 @@ impl MainScreen {
 
         MainScreenOutput {
             action: kill_request.map(|action| match action {
+                ProcessPanelAction::OpenInBrowser(port) => MainScreenAction::OpenInBrowser(port),
                 ProcessPanelAction::KillProcess(pid) => MainScreenAction::KillProcess(pid),
             }),
             killable_pids,
@@ -162,6 +165,27 @@ impl MainScreen {
             .into_iter()
             .filter(|row_key| filter.matches(process, row_key.port))
             .collect()
+    }
+
+    fn sort_visible_entries(visible_entries: &mut [(&localporter_core::ProcessSummary, RowKey)]) {
+        visible_entries.sort_by(|(left_process, left_row), (right_process, right_row)| {
+            let left_name = left_process.name_or_unknown().to_ascii_lowercase();
+            let right_name = right_process.name_or_unknown().to_ascii_lowercase();
+
+            match (left_row.port, right_row.port) {
+                (Some(left_port), Some(right_port)) => left_port
+                    .port
+                    .cmp(&right_port.port)
+                    .then_with(|| left_port.protocol.cmp(&right_port.protocol))
+                    .then_with(|| left_name.cmp(&right_name))
+                    .then_with(|| left_process.pid.cmp(&right_process.pid)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => left_name
+                    .cmp(&right_name)
+                    .then_with(|| left_process.pid.cmp(&right_process.pid)),
+            }
+        });
     }
 }
 
@@ -236,7 +260,7 @@ impl SearchFilter {
 
 #[cfg(test)]
 mod tests {
-    use super::SearchFilter;
+    use super::{MainScreen, RowKey, SearchFilter};
     use localporter_core::{BoundPort, PortProtocol, ProcessSummary};
     use std::time::Duration;
 
@@ -296,9 +320,83 @@ mod tests {
         assert!(!SearchFilter::parse("node").matches(&process, None));
     }
 
+    #[test]
+    fn sorts_visible_entries_by_port_then_protocol_then_process() {
+        let beta = test_process_with_pid("beta", 2);
+        let alpha = test_process_with_pid("alpha", 1);
+        let gamma = test_process_with_pid("gamma", 3);
+        let delta = test_process_with_pid("delta", 4);
+
+        let mut entries = vec![
+            (
+                &beta,
+                RowKey {
+                    pid: beta.pid,
+                    port: Some(BoundPort {
+                        protocol: PortProtocol::Udp,
+                        port: 8080,
+                    }),
+                },
+            ),
+            (
+                &alpha,
+                RowKey {
+                    pid: alpha.pid,
+                    port: Some(BoundPort {
+                        protocol: PortProtocol::Tcp,
+                        port: 8080,
+                    }),
+                },
+            ),
+            (
+                &gamma,
+                RowKey {
+                    pid: gamma.pid,
+                    port: Some(BoundPort {
+                        protocol: PortProtocol::Tcp,
+                        port: 3000,
+                    }),
+                },
+            ),
+            (
+                &delta,
+                RowKey {
+                    pid: delta.pid,
+                    port: None,
+                },
+            ),
+        ];
+
+        MainScreen::sort_visible_entries(&mut entries);
+
+        assert_eq!(
+            entries
+                .into_iter()
+                .map(|(process, row_key)| {
+                    (
+                        process.name.clone(),
+                        row_key
+                            .port
+                            .map(|bound_port| (bound_port.port, bound_port.protocol)),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("gamma".to_owned(), Some((3000, PortProtocol::Tcp))),
+                ("alpha".to_owned(), Some((8080, PortProtocol::Tcp))),
+                ("beta".to_owned(), Some((8080, PortProtocol::Udp))),
+                ("delta".to_owned(), None),
+            ]
+        );
+    }
+
     fn test_process(name: &str) -> ProcessSummary {
+        test_process_with_pid(name, 1)
+    }
+
+    fn test_process_with_pid(name: &str, pid: u32) -> ProcessSummary {
         ProcessSummary {
-            pid: 1,
+            pid,
             name: name.to_owned(),
             command: String::new(),
             ports: Vec::new(),

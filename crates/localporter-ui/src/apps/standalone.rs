@@ -200,6 +200,7 @@ impl eframe::App for StandaloneApp {
 impl StandaloneApp {
     fn handle_main_screen_action(&mut self, action: MainScreenAction) {
         match action {
+            MainScreenAction::OpenInBrowser(port) => self.state.open_in_browser(port),
             MainScreenAction::KillProcess(pid) => {
                 self.request_kill_action(PendingKillAction::Single(pid));
             }

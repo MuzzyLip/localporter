@@ -1,5 +1,7 @@
 use std::{
     collections::HashSet,
+    io,
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -319,6 +321,30 @@ impl AppState {
             let _ = update_tx.send(AppUpdate::KillFinished(KillUpdate { pid, outcome }));
             ctx.request_repaint();
         });
+    }
+
+    pub fn open_in_browser(&mut self, port: u16) {
+        let url = browser_url(port);
+
+        match open_url_in_browser(&url) {
+            Ok(()) => {
+                log_info!("opened port in browser: port={port} url={url}");
+                self.push_toast(ToastUpdate {
+                    level: ToastLevel::Success,
+                    message: format!("Opened {url}"),
+                });
+            }
+            Err(error) => {
+                let message = format_browser_open_error(&error);
+                log_warn!("failed to open port in browser: port={port} error={message}");
+                self.push_toast(ToastUpdate {
+                    level: ToastLevel::Error,
+                    message: format!("Failed to open {url}: {message}"),
+                });
+            }
+        }
+
+        self.ctx.request_repaint();
     }
 
     #[allow(dead_code)]
@@ -680,6 +706,41 @@ fn kill_process_by_pid(pid: u32) -> Result<(), localporter_core::SourceError> {
 
     log_info!("kill command succeeded: pid={pid}");
     Ok(())
+}
+
+fn browser_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+fn open_url_in_browser(url: &str) -> io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()?
+            .wait()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn()?.wait()?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "open in browser is not supported on this platform",
+    ))
+}
+
+fn format_browser_open_error(error: &io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::NotFound => "browser launcher command not found".to_owned(),
+        io::ErrorKind::PermissionDenied => "permission denied".to_owned(),
+        _ => error.to_string(),
+    }
 }
 
 fn format_source_error(error: &localporter_core::SourceError) -> String {
@@ -1103,6 +1164,11 @@ mod tests {
             cpu_percent: 0.0,
             memory_usage: 0,
         }
+    }
+
+    #[test]
+    fn browser_url_targets_loopback_http() {
+        assert_eq!(browser_url(3000), "http://127.0.0.1:3000");
     }
 
     #[cfg(test)]
