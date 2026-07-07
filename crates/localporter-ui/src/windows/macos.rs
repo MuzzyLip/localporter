@@ -202,6 +202,7 @@ impl MacOsMenuBarHost {
 
     fn show_standalone(&self, ctx: &egui::Context) {
         set_regular_activation_policy();
+        set_application_icon();
         activate_application();
         ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(false));
