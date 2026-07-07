@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use eframe::egui::{self, Pos2, ViewportCommand, pos2, vec2};
 use localporter_core::{log_debug, log_info};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSScreen};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage, NSScreen};
+use objc2_foundation::NSData;
 use tray_icon::{
     MouseButton, MouseButtonState, Rect as TrayRect, TrayIcon, TrayIconBuilder, TrayIconEvent,
     menu::{Menu, PredefinedMenuItem},
@@ -14,6 +15,7 @@ use crate::windows::constants::{APP_NAME, DEFAULT_HEIGHT, DEFAULT_WIDTH};
 const PANEL_GAP: f32 = 6.0;
 const PANEL_EDGE_PADDING: f32 = 8.0;
 const TRAY_ICON_SIZE: u32 = 18;
+const APP_ICON_PNG: &[u8] = include_bytes!("../../assets/app-icon.png");
 
 pub struct MacOsMenuBarHost {
     _tray_icon: TrayIcon,
@@ -68,6 +70,7 @@ impl Default for PanelState {
 impl MacOsMenuBarHost {
     pub fn new(ctx: &egui::Context) -> Result<Self, String> {
         set_accessory_activation_policy();
+        set_application_icon();
 
         let state = Arc::new(Mutex::new(PanelState::default()));
         let tray_state = Arc::clone(&state);
@@ -395,6 +398,29 @@ fn set_accessory_activation_policy() {
 
     let app = NSApplication::sharedApplication(mtm);
     let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+}
+
+fn set_application_icon() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+
+    let Some(image) = application_icon_image(mtm) else {
+        return;
+    };
+
+    let app = NSApplication::sharedApplication(mtm);
+    unsafe {
+        app.setApplicationIconImage(Some(&image));
+    }
+}
+
+fn application_icon_image(mtm: MainThreadMarker) -> Option<objc2::rc::Retained<NSImage>> {
+    let data = unsafe {
+        NSData::dataWithBytes_length(APP_ICON_PNG.as_ptr().cast(), APP_ICON_PNG.len())
+    };
+
+    NSImage::initWithData(mtm.alloc::<NSImage>(), &data)
 }
 
 fn activate_application() {

@@ -6,3 +6,6 @@ edition.workspace = true
 [dependencies]
 eframe.workspace = true
 localporter-ui.workspace = true
+
+[build-dependencies]
+winres = "0.1"
