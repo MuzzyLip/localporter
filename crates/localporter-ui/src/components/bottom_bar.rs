@@ -7,6 +7,7 @@ pub struct BottomBar;
 pub struct BottomBarResponse {
     pub settings_clicked: bool,
     pub kill_all_clicked: bool,
+    pub quit_clicked: bool,
 }
 
 impl BottomBar {
@@ -23,9 +24,17 @@ impl BottomBar {
     const ACTION_FILL_DISABLED: Color32 = Color32::from_rgb(247, 242, 242);
     const ACTION_STROKE_ENABLED: Color32 = Color32::from_rgb(237, 196, 196);
     const ACTION_STROKE_DISABLED: Color32 = Color32::from_rgb(234, 224, 224);
+    const QUIT_TEXT: Color32 = Color32::from_rgb(177, 49, 49);
+    const QUIT_FILL: Color32 = Color32::from_rgb(255, 240, 240);
+    const QUIT_STROKE: Color32 = Color32::from_rgb(237, 196, 196);
     const ICON_SIZE: f32 = 12.0;
 
-    pub fn show(&mut self, ui: &mut egui::Ui, killable_count: usize) -> BottomBarResponse {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        killable_count: usize,
+        show_quit: bool,
+    ) -> BottomBarResponse {
         let mut response = BottomBarResponse::default();
         let width = ui.available_width();
         let (outer_rect, _) =
@@ -46,13 +55,23 @@ impl BottomBar {
             ui.set_min_size(inner_rect.size());
             let settings_width = self.settings_button_width(ui);
             let kill_width = self.kill_button_width(ui, killable_count);
+            let quit_width = if show_quit {
+                self.quit_button_width(ui)
+            } else {
+                0.0
+            };
+            let right_group_width = if show_quit {
+                kill_width + Self::BUTTON_GAP + quit_width
+            } else {
+                kill_width
+            };
             let left_rect = egui::Rect::from_min_size(
                 inner_rect.left_top(),
                 egui::vec2(settings_width, Self::CONTENT_HEIGHT),
             );
             let right_rect = egui::Rect::from_min_size(
-                egui::pos2(inner_rect.right() - kill_width, inner_rect.top()),
-                egui::vec2(kill_width, Self::CONTENT_HEIGHT),
+                egui::pos2(inner_rect.right() - right_group_width, inner_rect.top()),
+                egui::vec2(right_group_width, Self::CONTENT_HEIGHT),
             );
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
@@ -65,6 +84,12 @@ impl BottomBar {
             ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
                 ui.set_min_size(right_rect.size());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = Self::BUTTON_GAP;
+
+                    if show_quit && self.quit_button(ui).clicked() {
+                        response.quit_clicked = true;
+                    }
+
                     if self
                         .kill_all_button(ui, killable_count, killable_count > 0)
                         .clicked()
@@ -145,6 +170,10 @@ impl BottomBar {
 
     fn settings_button_width(&self, ui: &egui::Ui) -> f32 {
         self.action_button_width(ui, "Settings", false)
+    }
+
+    fn quit_button_width(&self, ui: &egui::Ui) -> f32 {
+        self.action_button_width(ui, "Quit", false)
     }
 
     fn action_button_width(&self, ui: &egui::Ui, text: &str, has_icon: bool) -> f32 {
@@ -233,5 +262,18 @@ impl BottomBar {
         );
 
         response
+    }
+
+    fn quit_button(&self, ui: &mut egui::Ui) -> egui::Response {
+        self.inline_action_button(
+            ui,
+            "Quit",
+            None,
+            Self::QUIT_FILL,
+            Stroke::new(1.0, Self::QUIT_STROKE),
+            Self::QUIT_TEXT,
+            true,
+            true,
+        )
     }
 }

@@ -123,7 +123,7 @@ impl MainScreen {
     }
 
     fn should_show_process(
-        process: &localporter_core::ProcessSummary,
+        _process: &localporter_core::ProcessSummary,
         show_all_enabled: bool,
     ) -> bool {
         #[cfg(target_os = "windows")]

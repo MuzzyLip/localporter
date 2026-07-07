@@ -1,4 +1,4 @@
-use std::{env, fmt, fs, io, path::PathBuf, process::Command, time::Duration};
+use std::{env, fmt, fs, io, path::PathBuf, time::Duration};
 
 const SETTINGS_FILE_NAME: &str = "settings.conf";
 const SETTINGS_DIR_NAME: &str = "LocalPorter";

@@ -3,15 +3,22 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::{
-    components::{BottomBar, ConfirmDialog, FilterBar, SettingsModal, TitleBar, ToastOverlay},
+    components::{
+        BottomBar, ConfirmDialog, FilterBar, MenuBarPanel, SettingsModal, TitleBar, ToastOverlay,
+    },
     screens::{MainScreen, MainScreenAction},
     state::{AppSettings, AppState},
-    windows::constants::WINDOW_CORNER_RADIUS,
+    windows::{
+        constants::WINDOW_CORNER_RADIUS,
+        host::{WindowHost, WindowMode},
+    },
 };
 
 pub struct StandaloneApp {
     state: AppState,
+    window_host: WindowHost,
     title_bar: TitleBar,
+    menu_bar_panel: MenuBarPanel,
     filter_bar: FilterBar,
     main_screen: MainScreen,
     bottom_bar: BottomBar,
@@ -39,7 +46,9 @@ impl StandaloneApp {
 
         Self {
             state: AppState::new(cc.egui_ctx.clone()),
+            window_host: WindowHost::new(cc),
             title_bar: TitleBar,
+            menu_bar_panel: MenuBarPanel,
             filter_bar: FilterBar,
             main_screen: MainScreen::default(),
             bottom_bar: BottomBar,
@@ -57,9 +66,11 @@ impl StandaloneApp {
 
 impl eframe::App for StandaloneApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        self.window_host.update(ui.ctx());
         self.state.drain_updates();
         let toasts = self.state.toast_views();
         ui.ctx().request_repaint_after(Duration::from_secs(1));
+        let window_mode = self.window_host.mode();
         let maximized = ui
             .ctx()
             .input(|input| input.viewport().maximized.unwrap_or(false));
@@ -68,64 +79,112 @@ impl eframe::App for StandaloneApp {
             .frame(egui::Frame::new().inner_margin(egui::Margin::ZERO))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                let panel_rect = ui.max_rect().shrink(0.5);
-                ui.painter().rect_filled(
-                    panel_rect,
-                    full_corner_radius(maximized),
-                    WINDOW_BACKGROUND,
-                );
+                let outer_panel_rect = ui.max_rect().shrink(0.5);
+                let panel_rect = if window_mode == WindowMode::MacOsMenuBarPanel {
+                    self.menu_bar_panel.paint_frame(
+                        ui,
+                        outer_panel_rect,
+                        self.window_host.menu_bar_panel_arrow_tip_x(ui.ctx()),
+                    )
+                } else {
+                    ui.painter().rect_filled(
+                        outer_panel_rect,
+                        full_corner_radius(maximized),
+                        WINDOW_BACKGROUND,
+                    );
+                    ui.painter().rect_stroke(
+                        outer_panel_rect,
+                        full_corner_radius(maximized),
+                        egui::Stroke::new(1.0, window_border()),
+                        egui::StrokeKind::Middle,
+                    );
+                    outer_panel_rect
+                };
 
-                let mut show_all_enabled = self.state.show_all_enabled;
-                if self.title_bar.show(ui, &mut show_all_enabled) {
-                    self.state.set_show_all_enabled(show_all_enabled);
-                }
-                self.filter_bar.show(ui, &mut self.search_query);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(panel_rect), |ui| {
+                    ui.set_min_size(panel_rect.size());
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
-                let remaining_rect = ui.available_rect_before_wrap();
-                let bottom_bar_rect = egui::Rect::from_min_max(
-                    egui::pos2(
-                        remaining_rect.left(),
-                        (remaining_rect.bottom() - BottomBar::HEIGHT).max(remaining_rect.top()),
-                    ),
-                    remaining_rect.right_bottom(),
-                );
-                let content_rect = egui::Rect::from_min_max(
-                    remaining_rect.min,
-                    egui::pos2(remaining_rect.max.x, bottom_bar_rect.min.y),
-                );
+                    let mut show_all_enabled = self.state.show_all_enabled;
+                    let title_changed = if window_mode == WindowMode::MacOsMenuBarPanel {
+                        self.menu_bar_panel.show_header(ui, &mut show_all_enabled)
+                    } else {
+                        self.title_bar.show(ui, &mut show_all_enabled)
+                    };
 
-                ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
-                    ui.set_min_size(content_rect.size());
-                    let output = self.main_screen.ui(ui, &mut self.state, &self.search_query);
-                    self.filtered_killable_pids = output.killable_pids;
-                    if let Some(action) = output.action {
-                        self.handle_main_screen_action(action);
+                    if title_changed {
+                        self.state.set_show_all_enabled(show_all_enabled);
                     }
-                });
+                    self.filter_bar.show(ui, &mut self.search_query);
 
-                ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_bar_rect), |ui| {
-                    ui.set_min_size(bottom_bar_rect.size());
-                    let bottom_bar_response =
-                        self.bottom_bar.show(ui, self.filtered_killable_pids.len());
-                    if bottom_bar_response.kill_all_clicked {
-                        self.request_kill_action(PendingKillAction::KillAllKillable(
-                            self.filtered_killable_pids.clone(),
-                        ));
-                    }
-                    if bottom_bar_response.settings_clicked {
-                        if !self.settings_open {
-                            self.pending_settings = Some(self.state.settings().clone());
+                    let remaining_rect = ui.available_rect_before_wrap();
+                    let footer_height = if window_mode == WindowMode::MacOsMenuBarPanel {
+                        MenuBarPanel::FOOTER_HEIGHT
+                    } else {
+                        BottomBar::HEIGHT
+                    };
+                    let bottom_bar_rect = egui::Rect::from_min_max(
+                        egui::pos2(
+                            remaining_rect.left(),
+                            (remaining_rect.bottom() - footer_height).max(remaining_rect.top()),
+                        ),
+                        remaining_rect.right_bottom(),
+                    );
+                    let content_rect = egui::Rect::from_min_max(
+                        remaining_rect.min,
+                        egui::pos2(remaining_rect.max.x, bottom_bar_rect.min.y),
+                    );
+
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                        ui.set_min_size(content_rect.size());
+                        let output = self.main_screen.ui(ui, &mut self.state, &self.search_query);
+                        self.filtered_killable_pids = output.killable_pids;
+                        if let Some(action) = output.action {
+                            self.handle_main_screen_action(action);
                         }
-                        self.settings_open = true;
-                    }
-                });
+                    });
 
-                ui.painter().rect_stroke(
-                    panel_rect,
-                    full_corner_radius(maximized),
-                    egui::Stroke::new(1.0, window_border()),
-                    egui::StrokeKind::Middle,
-                );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_bar_rect), |ui| {
+                        ui.set_min_size(bottom_bar_rect.size());
+                        if window_mode == WindowMode::MacOsMenuBarPanel {
+                            let footer_response = self
+                                .menu_bar_panel
+                                .show_footer(ui, self.filtered_killable_pids.len());
+                            if footer_response.kill_all_clicked {
+                                self.request_kill_action(PendingKillAction::KillAllKillable(
+                                    self.filtered_killable_pids.clone(),
+                                ));
+                            }
+                            if footer_response.settings_clicked {
+                                if !self.settings_open {
+                                    self.pending_settings = Some(self.state.settings().clone());
+                                }
+                                self.settings_open = true;
+                            }
+                            if footer_response.quit_clicked {
+                                self.window_host.request_quit(ui.ctx());
+                            }
+                        } else {
+                            let bottom_bar_response =
+                                self.bottom_bar
+                                    .show(ui, self.filtered_killable_pids.len(), false);
+                            if bottom_bar_response.kill_all_clicked {
+                                self.request_kill_action(PendingKillAction::KillAllKillable(
+                                    self.filtered_killable_pids.clone(),
+                                ));
+                            }
+                            if bottom_bar_response.settings_clicked {
+                                if !self.settings_open {
+                                    self.pending_settings = Some(self.state.settings().clone());
+                                }
+                                self.settings_open = true;
+                            }
+                            if bottom_bar_response.quit_clicked {
+                                self.window_host.request_quit(ui.ctx());
+                            }
+                        }
+                    });
+                });
             });
 
         self.show_settings_modal(ui.ctx());
