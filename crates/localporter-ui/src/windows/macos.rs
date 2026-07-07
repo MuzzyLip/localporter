@@ -396,7 +396,6 @@ fn set_accessory_activation_policy() {
     let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
-fn set_application_icon() {
 fn set_regular_activation_policy() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -422,9 +421,8 @@ fn set_application_icon() {
 }
 
 fn application_icon_image(mtm: MainThreadMarker) -> Option<objc2::rc::Retained<NSImage>> {
-    let data = unsafe {
-        NSData::dataWithBytes_length(APP_ICON_PNG.as_ptr().cast(), APP_ICON_PNG.len())
-    };
+    let data =
+        unsafe { NSData::dataWithBytes_length(APP_ICON_PNG.as_ptr().cast(), APP_ICON_PNG.len()) };
 
     NSImage::initWithData(mtm.alloc::<NSImage>(), &data)
 }
