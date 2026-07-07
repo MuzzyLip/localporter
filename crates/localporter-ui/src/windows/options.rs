@@ -5,11 +5,10 @@ use eframe::{
 };
 
 #[cfg(target_os = "macos")]
-use eframe::egui::{IconData, WindowLevel};
+use eframe::egui::IconData;
 
 #[cfg(not(target_os = "macos"))]
 use eframe::egui::IconData;
-
 use crate::windows::constants::{
     APP_NAME, DEFAULT_HEIGHT, DEFAULT_WIDTH, MIN_HEIGHT, MIN_WIDTH, WINDOWS_DECORATED,
     WINDOWS_RESIZEABLE,
@@ -33,8 +32,7 @@ pub fn standalone_native_options() -> NativeOptions {
         .with_title_shown(false)
         .with_titlebar_buttons_shown(false)
         .with_titlebar_shown(false)
-        .with_fullsize_content_view(true)
-        .with_window_level(WindowLevel::AlwaysOnTop);
+        .with_fullsize_content_view(true);
 
     NativeOptions {
         viewport,

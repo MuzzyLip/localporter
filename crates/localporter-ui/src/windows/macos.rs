@@ -7,7 +7,6 @@ use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage, NSScr
 use objc2_foundation::NSData;
 use tray_icon::{
     MouseButton, MouseButtonState, Rect as TrayRect, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    menu::{Menu, PredefinedMenuItem},
 };
 
 use crate::windows::constants::{APP_NAME, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -80,15 +79,8 @@ impl MacOsMenuBarHost {
             handle_tray_event(&tray_ctx, &tray_state, event);
         }));
 
-        let tray_menu = Menu::new();
-        tray_menu
-            .append(&PredefinedMenuItem::quit(None))
-            .map_err(|error| error.to_string())?;
-
         let tray_icon = TrayIconBuilder::new()
             .with_tooltip(APP_NAME)
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
             .with_icon(build_template_tray_icon())
             .with_icon_as_template(true)
             .build()
@@ -209,9 +201,11 @@ impl MacOsMenuBarHost {
     }
 
     fn show_standalone(&self, ctx: &egui::Context) {
+        set_regular_activation_policy();
         activate_application();
         ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(false));
+        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Focus);
         ctx.request_repaint();
@@ -224,6 +218,7 @@ impl MacOsMenuBarHost {
     }
 
     fn hide_panel(&self, ctx: &egui::Context) {
+        set_accessory_activation_policy();
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint();
 
@@ -284,6 +279,7 @@ fn show_panel(ctx: &egui::Context, state: &Arc<Mutex<PanelState>>, tray_rect: Op
         panel_origin(tray_rect.or(state.last_tray_rect), state.metrics)
     };
 
+    set_accessory_activation_policy();
     activate_application();
     ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(false));
@@ -398,6 +394,16 @@ fn set_accessory_activation_policy() {
 
     let app = NSApplication::sharedApplication(mtm);
     let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+}
+
+fn set_application_icon() {
+fn set_regular_activation_policy() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+
+    let app = NSApplication::sharedApplication(mtm);
+    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 }
 
 fn set_application_icon() {

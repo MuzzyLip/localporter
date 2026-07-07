@@ -362,7 +362,13 @@ impl TitleBar {
     fn send_action(&self, ctx: &egui::Context, action: WindowAction, maximized: bool) {
         match action {
             WindowAction::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
-            WindowAction::Minimize => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
+            WindowAction::Minimize => {
+                if cfg!(target_os = "macos") {
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                } else {
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+                }
+            }
             WindowAction::ToggleMaximize => {
                 ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
             }
