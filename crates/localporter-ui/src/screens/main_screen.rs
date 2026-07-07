@@ -134,6 +134,8 @@ impl MainScreen {
             return false;
         }
 
+        #[cfg(not(target_os = "windows"))]
+        let _ = process;
         let _ = show_all_enabled;
         true
     }
