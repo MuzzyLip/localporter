@@ -10,6 +10,8 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use eframe::egui;
 use localporter_core::adapter::macos::command::{CommandRunner, StdCommandRunner};
@@ -26,6 +28,8 @@ use localporter_core::{log_debug, log_error, log_info, log_warn};
 
 const TOAST_DURATION: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use super::settings::{
     AppSettings, KillBehavior, launch_at_startup_supported, read_launch_at_startup,
@@ -715,16 +719,16 @@ fn browser_url(port: u16) -> String {
 fn open_url_in_browser(url: &str) -> io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()?
-            .wait()?;
+        Command::new("explorer.exe")
+            .arg(url)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
         return Ok(());
     }
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(url).spawn()?.wait()?;
+        Command::new("open").arg(url).spawn()?;
         return Ok(());
     }
 

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use localporter_ui::{APP_NAME, StandaloneApp, init_logging, standalone_native_options};
 
 fn main() -> Result<(), eframe::Error> {
