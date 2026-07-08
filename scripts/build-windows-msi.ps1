@@ -21,7 +21,8 @@ $WixSource = Join-Path $RootDir "packaging\windows\localporter.wxs"
 $MsiPath = Join-Path $BundleDir ("LocalPorter-{0}-windows-x64.msi" -f $ArtifactVersion)
 $TemporaryMsiPath = Get-TemporaryArtifactPath -FinalPath $MsiPath
 
-Assert-CommandAvailable -CommandName "wix" -InstallHint "Install WiX v4 and ensure the 'wix' CLI is in PATH before building the MSI."
+Assert-CommandAvailable -CommandName "wix" -InstallHint "Install the WiX CLI and ensure the 'wix' command is in PATH before building the MSI."
+Assert-WixExtensionInstalled -ExtensionId "WixToolset.UI.wixext" -InstallHint "Run 'wix extension add --global WixToolset.UI.wixext' before building the MSI."
 Assert-PathExists -Path $WixSource -Description "WiX source file"
 Assert-PathExists -Path $BinaryPath -Description "Staged application binary"
 Assert-PathExists -Path $IconPath -Description "Application icon"
@@ -36,6 +37,8 @@ try {
         $WixSource,
         "-arch",
         "x64",
+        "-ext",
+        "WixToolset.UI.wixext",
         "-d",
         "ProductVersion=$MsiVersion",
         "-d",

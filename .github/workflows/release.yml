@@ -145,12 +145,22 @@ jobs:
         shell: pwsh
         run: |
           if (Get-Command wix -ErrorAction SilentlyContinue) {
-            dotnet tool update --global wix --version "4.*"
+            dotnet tool update --global wix --version "7.*"
           }
           else {
-            dotnet tool install --global wix --version "4.*"
+            dotnet tool install --global wix --version "7.*"
           }
           "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install WiX UI extension
+        shell: pwsh
+        run: |
+          $wixVersion = ((wix --version) -split '\+')[0]
+          $requiredExtension = "WixToolset.UI.wixext $wixVersion"
+          $installedExtensions = wix extension list
+          if (-not ($installedExtensions | Select-String -SimpleMatch $requiredExtension)) {
+            wix extension add --global "WixToolset.UI.wixext/$wixVersion"
+          }
 
       - name: Build Windows release artifacts
         shell: pwsh

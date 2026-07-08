@@ -51,6 +51,30 @@ function Assert-CommandAvailable {
     }
 }
 
+function Assert-WixExtensionInstalled {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExtensionId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$InstallHint
+    )
+
+    $extensions = Invoke-NativeCommand -FilePath "wix" -ArgumentList @(
+        "extension",
+        "list"
+    ) -CaptureOutput
+
+    $normalizedExtensionId = $ExtensionId.Trim()
+    $isInstalled = $extensions | Where-Object {
+        ([string]$_).Trim().StartsWith($normalizedExtensionId, [System.StringComparison]::OrdinalIgnoreCase)
+    }
+
+    if (-not $isInstalled) {
+        throw "$ExtensionId is not installed in the WiX extension cache. $InstallHint"
+    }
+}
+
 function Assert-PathExists {
     param(
         [Parameter(Mandatory = $true)]
