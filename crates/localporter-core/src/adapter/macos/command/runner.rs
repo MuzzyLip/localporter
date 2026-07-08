@@ -87,7 +87,11 @@ impl CommandRunner for StdCommandRunner {
 }
 
 fn background_command(program: &str) -> Command {
+    #[cfg(target_os = "windows")]
     let mut command = Command::new(program);
+
+    #[cfg(not(target_os = "windows"))]
+    let command = Command::new(program);
 
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
