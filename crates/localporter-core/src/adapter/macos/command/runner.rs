@@ -1,7 +1,13 @@
 use crate::SourceError;
 use std::{io::ErrorKind, process::Command};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use crate::{log_error, log_warn};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub trait CommandRunner: Send + Sync {
     fn run(&self, program: &str, args: &[&str]) -> Result<String, SourceError>;
@@ -11,35 +17,34 @@ pub struct StdCommandRunner;
 
 impl CommandRunner for StdCommandRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<String, SourceError> {
-        let output =
-            Command::new(program)
-                .args(args)
-                .output()
-                .map_err(|error| match error.kind() {
-                    ErrorKind::NotFound => {
-                        log_error!("command spawn failed: program={program} args={args:?} kind=not_found");
-                        SourceError::CommandNotFound {
-                            program: program.to_owned(),
-                        }
+        let output = background_command(program)
+            .args(args)
+            .output()
+            .map_err(|error| match error.kind() {
+                ErrorKind::NotFound => {
+                    log_error!("command spawn failed: program={program} args={args:?} kind=not_found");
+                    SourceError::CommandNotFound {
+                        program: program.to_owned(),
                     }
-                    ErrorKind::PermissionDenied => {
-                        log_warn!(
-                            "command spawn denied: program={program} args={args:?} kind=permission_denied"
-                        );
-                        SourceError::PermissionDenied {
-                            program: program.to_owned(),
-                        }
+                }
+                ErrorKind::PermissionDenied => {
+                    log_warn!(
+                        "command spawn denied: program={program} args={args:?} kind=permission_denied"
+                    );
+                    SourceError::PermissionDenied {
+                        program: program.to_owned(),
                     }
-                    _ => {
-                        log_error!(
-                            "command spawn failed: program={program} args={args:?} error={error}"
-                        );
-                        SourceError::CommandFailed {
-                            program: program.to_owned(),
-                            stderr: error.to_string(),
-                        }
+                }
+                _ => {
+                    log_error!(
+                        "command spawn failed: program={program} args={args:?} error={error}"
+                    );
+                    SourceError::CommandFailed {
+                        program: program.to_owned(),
+                        stderr: error.to_string(),
                     }
-                })?;
+                }
+            })?;
 
         if output.status.success() {
             return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
@@ -79,6 +84,15 @@ impl CommandRunner for StdCommandRunner {
             },
         })
     }
+}
+
+fn background_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
 }
 
 fn is_permission_denied(stderr: &str) -> bool {

@@ -1,6 +1,8 @@
 use std::{env, fmt, fs, io, path::PathBuf, time::Duration};
 
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
 use std::process::Command;
 
 use localporter_core::{log_debug, log_error, log_info, log_warn};
@@ -270,10 +272,12 @@ fn settings_dir_path() -> Option<PathBuf> {
 const WINDOWS_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 #[cfg(target_os = "windows")]
 const WINDOWS_RUN_VALUE_NAME: &str = "LocalPorter";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(target_os = "windows")]
 fn read_windows_launch_at_startup() -> Result<bool, String> {
-    let output = Command::new("reg")
+    let output = windows_background_command("reg")
         .args(["query", WINDOWS_RUN_KEY, "/v", WINDOWS_RUN_VALUE_NAME])
         .output()
         .map_err(|error| format!("failed to query startup registry: {error}"))?;
@@ -287,7 +291,7 @@ fn write_windows_launch_at_startup(enabled: bool) -> Result<(), String> {
         let current_exe = env::current_exe()
             .map_err(|error| format!("failed to resolve current exe: {error}"))?;
         let command_value = format!("\"{}\"", current_exe.display());
-        let output = Command::new("reg")
+        let output = windows_background_command("reg")
             .args([
                 "add",
                 WINDOWS_RUN_KEY,
@@ -312,7 +316,7 @@ fn write_windows_launch_at_startup(enabled: bool) -> Result<(), String> {
             return Ok(());
         }
 
-        let output = Command::new("reg")
+        let output = windows_background_command("reg")
             .args([
                 "delete",
                 WINDOWS_RUN_KEY,
@@ -381,6 +385,13 @@ fn write_macos_launch_at_startup(enabled: bool) -> Result<(), String> {
 fn macos_launch_agent_path() -> Result<PathBuf, String> {
     let home = env::var_os("HOME").ok_or_else(|| "HOME is not set".to_owned())?;
     Ok(PathBuf::from(home).join("Library/LaunchAgents/com.localporter.app.plist"))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_background_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 #[cfg(target_os = "windows")]
