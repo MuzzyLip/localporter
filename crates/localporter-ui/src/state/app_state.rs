@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::HashSet,
     io,
@@ -10,8 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 
 use eframe::egui;
 use localporter_core::adapter::macos::command::{CommandRunner, StdCommandRunner};
