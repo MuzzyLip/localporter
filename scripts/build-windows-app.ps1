@@ -20,6 +20,12 @@ Assert-SupportedWindowsTargetTriple -TargetTriple $TargetTriple
 
 $Metadata = Get-CargoMetadata -CargoTomlPath $CargoToml
 $Version = Get-PackageVersion -Metadata $Metadata -PackageName $PackageName
+$ArtifactVersion = if ([string]::IsNullOrWhiteSpace($env:LOCALPORTER_RELEASE_VERSION)) {
+    $Version
+}
+else {
+    [string]$env:LOCALPORTER_RELEASE_VERSION
+}
 $MsiVersion = ConvertTo-MsiVersion -Version $Version
 $TargetRootDir = [System.IO.Path]::GetFullPath([string]$Metadata.target_directory)
 $TargetDir = Join-Path $TargetRootDir $TargetTriple
@@ -66,5 +72,6 @@ Assert-PathExists -Path $StagedBinaryPath -Description "Staged application binar
     BuiltBinaryPath = $BuiltBinaryPath
     IconPath = $IconPath
     Version = $Version
+    ArtifactVersion = $ArtifactVersion
     MsiVersion = $MsiVersion
 }

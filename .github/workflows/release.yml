@@ -111,7 +111,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build universal macOS DMG
+        env:
+          LOCALPORTER_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: ./scripts/build-macos-dmg.sh
+
+      - name: Show macOS bundle outputs
+        run: find target/universal-apple-darwin/bundle -maxdepth 3 -type f | sort
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -149,7 +154,13 @@ jobs:
 
       - name: Build Windows release artifacts
         shell: pwsh
+        env:
+          LOCALPORTER_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: ./scripts/build-windows-release.ps1
+
+      - name: Show Windows bundle outputs
+        shell: pwsh
+        run: Get-ChildItem -Path "target\x86_64-pc-windows-msvc\release\bundle" -Recurse -File | Select-Object -ExpandProperty FullName
 
       - name: Upload Windows ZIP artifact
         uses: actions/upload-artifact@v4

@@ -15,12 +15,11 @@ $RootDir = $BuildInfo.RootDir
 $BundleDir = $BuildInfo.BundleDir
 $BinaryPath = $BuildInfo.BinaryPath
 $IconPath = $BuildInfo.IconPath
-$Version = $BuildInfo.Version
+$ArtifactVersion = $BuildInfo.ArtifactVersion
 $MsiVersion = $BuildInfo.MsiVersion
 $WixSource = Join-Path $RootDir "packaging\windows\localporter.wxs"
-$MsiPath = Join-Path $BundleDir ("LocalPorter-{0}-windows-x64.msi" -f $Version)
+$MsiPath = Join-Path $BundleDir ("LocalPorter-{0}-windows-x64.msi" -f $ArtifactVersion)
 $TemporaryMsiPath = Get-TemporaryArtifactPath -FinalPath $MsiPath
-$WixUiExtension = "WixToolset.UI.wixext"
 
 Assert-CommandAvailable -CommandName "wix" -InstallHint "Install WiX v4 and ensure the 'wix' CLI is in PATH before building the MSI."
 Assert-PathExists -Path $WixSource -Description "WiX source file"
@@ -33,22 +32,10 @@ Remove-PathIfExists -Path $TemporaryMsiPath
 
 try {
     Invoke-NativeCommand -FilePath "wix" -ArgumentList @(
-        "extension",
-        "add",
-        "--acceptEula",
-        "yes",
-        $WixUiExtension
-    )
-
-    Invoke-NativeCommand -FilePath "wix" -ArgumentList @(
         "build",
-        "--acceptEula",
-        "yes",
         $WixSource,
         "-arch",
         "x64",
-        "-ext",
-        $WixUiExtension,
         "-d",
         "ProductVersion=$MsiVersion",
         "-d",
@@ -74,7 +61,7 @@ Write-Host "  $MsiPath"
 [pscustomobject]@{
     ArtifactType = "msi"
     ArtifactPath = $MsiPath
-    Version = $Version
+    Version = $ArtifactVersion
     MsiVersion = $MsiVersion
     TargetTriple = $TargetTriple
 }

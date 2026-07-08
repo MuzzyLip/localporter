@@ -1,5 +1,4 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
       Name="LocalPorter"
       Manufacturer="LocalPorter"
@@ -16,8 +15,6 @@
 
     <Icon Id="AppIcon.ico" SourceFile="$(var.AppIconPath)" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
-
-    <ui:WixUI Id="WixUI_Minimal" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="InstallRoot" Name="Programs">

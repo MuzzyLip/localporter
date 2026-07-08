@@ -14,8 +14,8 @@ if (-not $BuildInfo) {
 $BundleDir = $BuildInfo.BundleDir
 $StageDir = $BuildInfo.StageDir
 $BinaryName = $BuildInfo.BinaryName
-$Version = $BuildInfo.Version
-$ArchivePath = Join-Path $BundleDir ("LocalPorter-{0}-windows-x64.zip" -f $Version)
+$ArtifactVersion = $BuildInfo.ArtifactVersion
+$ArchivePath = Join-Path $BundleDir ("LocalPorter-{0}-windows-x64.zip" -f $ArtifactVersion)
 $TemporaryArchivePath = Get-TemporaryArtifactPath -FinalPath $ArchivePath
 
 New-Item -ItemType Directory -Path $BundleDir -Force | Out-Null
@@ -49,6 +49,6 @@ Write-Host "  $ArchivePath"
 [pscustomobject]@{
     ArtifactType = "zip"
     ArtifactPath = $ArchivePath
-    Version = $Version
+    Version = $ArtifactVersion
     TargetTriple = $TargetTriple
 }
