@@ -4,21 +4,75 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ASSETS_DIR="$ROOT_DIR/crates/localporter-ui/assets"
-TARGET_DIR="$ROOT_DIR/target/release"
+TARGET_ROOT="$ROOT_DIR/target"
+UNIVERSAL_BUILD_DIR="$TARGET_ROOT/universal-apple-darwin"
+UNIVERSAL_RELEASE_DIR="$UNIVERSAL_BUILD_DIR/release"
 APP_NAME="LocalPorter"
 BINARY_NAME="localporter-app"
 APP_BUNDLE_ID="com.localporter.app"
-BUNDLE_DIR="$TARGET_DIR/bundle/macos/$APP_NAME.app"
+BUNDLE_DIR="$UNIVERSAL_BUILD_DIR/bundle/macos/$APP_NAME.app"
 CONTENTS_DIR="$BUNDLE_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICON_PNG="$ASSETS_DIR/app-icon.png"
-ICON_ICNS="$TARGET_DIR/app-icon.icns"
-ICONSET_DIR="$TARGET_DIR/app-icon.iconset"
+ICON_ICNS="$UNIVERSAL_BUILD_DIR/app-icon.icns"
+ICONSET_DIR="$UNIVERSAL_BUILD_DIR/app-icon.iconset"
+UNIVERSAL_BINARY_PATH="$UNIVERSAL_RELEASE_DIR/$BINARY_NAME"
+TARGET_TRIPLES=(
+  "aarch64-apple-darwin"
+  "x86_64-apple-darwin"
+)
 APP_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT_DIR/Cargo.toml" | head -n 1)"
 
-build_binary() {
-  cargo build --locked --release -p "$BINARY_NAME"
+assert_command_available() {
+  local command_name="$1"
+  local install_hint="$2"
+
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "$command_name was not found in PATH. $install_hint" >&2
+    exit 1
+  fi
+}
+
+preflight_checks() {
+  assert_command_available "cargo" "Install Rust toolchain before building."
+  assert_command_available "lipo" "This script must run on macOS with Xcode command line tools installed."
+  assert_command_available "iconutil" "Install macOS command line tools before building the app bundle."
+  assert_command_available "sips" "This script must run on macOS."
+  assert_command_available "rustup" "Install rustup so the script can ensure both macOS targets are available."
+}
+
+ensure_rust_target() {
+  local target_triple="$1"
+
+  if rustup target list --installed | grep -qx "$target_triple"; then
+    return
+  fi
+
+  echo "Installing missing Rust target: $target_triple"
+  rustup target add "$target_triple"
+}
+
+build_arch_binaries() {
+  local target_triple
+
+  for target_triple in "${TARGET_TRIPLES[@]}"; do
+    ensure_rust_target "$target_triple"
+    cargo build --locked --release -p "$BINARY_NAME" --target "$target_triple"
+  done
+}
+
+create_universal_binary() {
+  local binary_inputs=()
+  local target_triple
+
+  mkdir -p "$UNIVERSAL_RELEASE_DIR"
+
+  for target_triple in "${TARGET_TRIPLES[@]}"; do
+    binary_inputs+=("$TARGET_ROOT/$target_triple/release/$BINARY_NAME")
+  done
+
+  lipo -create "${binary_inputs[@]}" -output "$UNIVERSAL_BINARY_PATH"
 }
 
 warn_if_icon_is_small() {
@@ -35,6 +89,7 @@ warn_if_icon_is_small() {
 generate_icns() {
   warn_if_icon_is_small
 
+  mkdir -p "$UNIVERSAL_BUILD_DIR"
   rm -rf "$ICONSET_DIR"
   mkdir -p "$ICONSET_DIR"
 
@@ -56,7 +111,7 @@ prepare_bundle() {
   rm -rf "$BUNDLE_DIR"
   mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
-  cp "$TARGET_DIR/$BINARY_NAME" "$MACOS_DIR/$APP_NAME"
+  cp "$UNIVERSAL_BINARY_PATH" "$MACOS_DIR/$APP_NAME"
   chmod +x "$MACOS_DIR/$APP_NAME"
   cp "$ICON_ICNS" "$RESOURCES_DIR/app-icon.icns"
 }
@@ -97,13 +152,17 @@ EOF
 }
 
 main() {
-  build_binary
+  preflight_checks
+  build_arch_binaries
+  create_universal_binary
   generate_icns
   prepare_bundle
   write_info_plist
 
-  echo "Built macOS app bundle:"
+  echo "Built macOS universal app bundle:"
   echo "  $BUNDLE_DIR"
+  echo "Universal binary architectures:"
+  lipo -info "$UNIVERSAL_BINARY_PATH"
 }
 
 main "$@"
