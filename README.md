@@ -48,9 +48,11 @@ Currently supported platforms: `macOS` and `Windows`.
 ## Showcase
 
 <p align="center">
-  <video src="./docs/localporter-showcase.mp4" controls preload="metadata" width="100%">
-    Your browser does not support embedded video playback.
-  </video>
+  <img src="./docs/localporter-showcase.gif" alt="LocalPorter showcase" width="100%">
+</p>
+
+<p align="center">
+  <a href="./docs/localporter-showcase.mp4">Watch MP4</a>
 </p>
 
 ## Features
