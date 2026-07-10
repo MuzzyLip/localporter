@@ -42,9 +42,7 @@ impl ProcessPanel {
                     return None;
                 }
 
-                let Some(port) = Self::browser_open_port(port) else {
-                    return None;
-                };
+                let port = Self::browser_open_port(port)?;
 
                 Self::open_in_browser_button(ui, port, visible)
                     .clicked()

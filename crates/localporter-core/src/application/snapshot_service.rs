@@ -204,9 +204,9 @@ fn map_source_error(
             pid,
         },
         SourceError::InvalidOutput { .. } => CollectionWarning::MalformedOutput { source },
-        SourceError::CommandNotFound { .. } | SourceError::CommandFailed { .. } => {
-            CollectionWarning::SourceUnavailable { source }
-        }
+        SourceError::CommandNotFound { .. }
+        | SourceError::CommandFailed { .. }
+        | SourceError::CommandTimedOut { .. } => CollectionWarning::SourceUnavailable { source },
     }
 }
 
@@ -221,6 +221,11 @@ fn log_source_error(source: &'static str, pid: Option<u32>, error: &SourceError)
             log_warn!(
                 "source error: source={source} pid={pid:?} kind=command_failed program={program} stderr={}",
                 stderr.trim()
+            );
+        }
+        SourceError::CommandTimedOut { program } => {
+            log_warn!(
+                "source error: source={source} pid={pid:?} kind=command_timed_out program={program}"
             );
         }
         SourceError::PermissionDenied { program } => {

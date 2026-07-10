@@ -1,4 +1,9 @@
-use std::{env, fmt, fs, io, path::PathBuf, time::Duration};
+use std::{
+    env, fmt, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -10,9 +15,10 @@ use localporter_core::{log_debug, log_error, log_info, log_warn};
 const SETTINGS_FILE_NAME: &str = "settings.conf";
 const SETTINGS_DIR_NAME: &str = "LocalPorter";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RefreshInterval {
     OneSecond,
+    #[default]
     TwoSeconds,
     ThreeSeconds,
     FiveSeconds,
@@ -59,15 +65,10 @@ impl RefreshInterval {
     }
 }
 
-impl Default for RefreshInterval {
-    fn default() -> Self {
-        Self::TwoSeconds
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KillBehavior {
     Direct,
+    #[default]
     Confirm,
 }
 
@@ -97,12 +98,6 @@ impl KillBehavior {
     }
 }
 
-impl Default for KillBehavior {
-    fn default() -> Self {
-        Self::Confirm
-    }
-}
-
 impl fmt::Display for KillBehavior {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -112,21 +107,11 @@ impl fmt::Display for KillBehavior {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppSettings {
     pub refresh_interval: RefreshInterval,
     pub kill_behavior: KillBehavior,
     pub launch_at_startup: bool,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            refresh_interval: RefreshInterval::default(),
-            kill_behavior: KillBehavior::default(),
-            launch_at_startup: false,
-        }
-    }
 }
 
 impl AppSettings {
@@ -191,10 +176,21 @@ impl AppSettings {
             self.kill_behavior,
             self.launch_at_startup
         );
-        fs::write(&path, contents)?;
+        atomic_write(&path, contents.as_bytes())?;
         log_info!("settings saved: path={}", path.display());
         Ok(())
     }
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("settings path has no parent directory"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(contents)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 pub fn launch_at_startup_supported() -> bool {
@@ -436,5 +432,17 @@ mod tests {
     #[test]
     fn kill_behavior_defaults_to_confirm() {
         assert_eq!(KillBehavior::default(), KillBehavior::Confirm);
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_settings_without_temp_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SETTINGS_FILE_NAME);
+        fs::write(&path, "old settings").unwrap();
+
+        atomic_write(&path, b"new settings").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new settings");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

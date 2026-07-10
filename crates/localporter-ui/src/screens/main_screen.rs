@@ -12,6 +12,7 @@ struct RowKey {
     port: Option<BoundPort>,
 }
 
+#[derive(Default)]
 pub struct MainScreen {
     process_panel: ProcessPanel,
     expanded_rows: HashSet<RowKey>,
@@ -26,15 +27,6 @@ pub struct MainScreenOutput {
 pub enum MainScreenAction {
     OpenInBrowser(u16),
     KillProcess(u32),
-}
-
-impl Default for MainScreen {
-    fn default() -> Self {
-        Self {
-            process_panel: ProcessPanel::default(),
-            expanded_rows: HashSet::new(),
-        }
-    }
 }
 
 impl MainScreen {

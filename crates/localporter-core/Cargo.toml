@@ -2,3 +2,6 @@
 name = "localporter-core"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+wait-timeout = "0.2"

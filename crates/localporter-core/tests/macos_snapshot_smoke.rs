@@ -11,7 +11,7 @@ use localporter_core::{
 
 #[test]
 fn collects_local_ports_with_best_effort_and_prints_snapshot() {
-    let runner = Arc::new(StdCommandRunner);
+    let runner = Arc::new(StdCommandRunner::default());
     let service = SnapshotService::new(
         Arc::new(LsofPortSource::new(runner.clone())),
         Arc::new(PsProcessInfoSource::new(runner.clone())),

@@ -15,15 +15,7 @@ use std::{
 
 use eframe::egui;
 use localporter_core::adapter::macos::command::{CommandRunner, StdCommandRunner};
-#[cfg(target_os = "macos")]
-use localporter_core::adapter::macos::command::{
-    LsofPortSource, PsParentChainSource, PsProcessInfoSource,
-};
-#[cfg(target_os = "windows")]
-use localporter_core::adapter::windows::command::{
-    CimParentChainSource, CimProcessInfoSource, NetConnectionPortSource,
-};
-use localporter_core::{PortQueryScope, ProcessSnapshot, ProcessSummary, SnapshotService};
+use localporter_core::{PortQueryScope, ProcessSnapshot, ProcessSummary};
 use localporter_core::{log_debug, log_error, log_info, log_warn};
 
 const TOAST_DURATION: Duration = Duration::from_secs(4);
@@ -31,6 +23,7 @@ const MAX_TOASTS: usize = 3;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+use super::collection_controller::{CollectionCommand, CollectionRequest, spawn_collection_worker};
 use super::settings::{
     AppSettings, KillBehavior, launch_at_startup_supported, read_launch_at_startup,
     write_launch_at_startup,
@@ -52,21 +45,10 @@ pub struct AppState {
     update_rx: mpsc::Receiver<AppUpdate>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CollectionCommand {
-    UpdateRequest(CollectionRequest),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CollectionRequest {
-    scope: PortQueryScope,
-    request_id: u64,
-}
-
 #[derive(Debug)]
-struct SnapshotUpdate {
-    request_id: u64,
-    snapshot: ProcessSnapshot,
+pub(super) struct SnapshotUpdate {
+    pub(super) request_id: u64,
+    pub(super) snapshot: ProcessSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,25 +79,25 @@ struct ToastUpdate {
 }
 
 #[derive(Debug)]
-struct KillUpdate {
+pub(super) struct KillUpdate {
     pid: u32,
     outcome: Result<(), String>,
 }
 
 #[derive(Debug)]
-struct KillAllUpdate {
+pub(super) struct KillAllUpdate {
     successes: Vec<u32>,
     failures: Vec<KillFailure>,
 }
 
 #[derive(Debug)]
-struct KillFailure {
+pub(super) struct KillFailure {
     pid: u32,
     message: String,
 }
 
 #[derive(Debug)]
-enum AppUpdate {
+pub(super) enum AppUpdate {
     Snapshot(SnapshotUpdate),
     KillFinished(KillUpdate),
     KillAllFinished(KillAllUpdate),
@@ -124,10 +106,10 @@ enum AppUpdate {
 impl AppState {
     pub fn new(ctx: egui::Context) -> Self {
         let mut settings = AppSettings::load();
-        if launch_at_startup_supported() {
-            if let Ok(enabled) = read_launch_at_startup() {
-                settings.launch_at_startup = enabled;
-            }
+        if launch_at_startup_supported()
+            && let Ok(enabled) = read_launch_at_startup()
+        {
+            settings.launch_at_startup = enabled;
         }
 
         log_info!(
@@ -142,83 +124,17 @@ impl AppState {
             request_id: 0,
         };
         let (update_tx, update_rx) = mpsc::channel();
-        let worker_update_tx = update_tx.clone();
         let (command_tx, command_rx) = mpsc::channel();
-        let (completed_tx, completed_rx) = mpsc::channel();
-        let worker_ctx = ctx.clone();
         let poll_interval_ms = Arc::new(AtomicU64::new(
             settings.refresh_interval.duration().as_millis() as u64,
         ));
-        let worker_poll_interval_ms = poll_interval_ms.clone();
-
-        thread::spawn(move || {
-            log_info!("collection worker started");
-            let service = Arc::new(build_snapshot_service());
-            let current_request_id = Arc::new(AtomicU64::new(initial_request.request_id));
-            let mut request = initial_request;
-            let mut active_request_ids = HashSet::new();
-
-            spawn_collection(
-                service.clone(),
-                worker_update_tx.clone(),
-                completed_tx.clone(),
-                worker_ctx.clone(),
-                current_request_id.clone(),
-                request,
-            );
-            active_request_ids.insert(request.request_id);
-
-            loop {
-                while let Ok(completed_request_id) = completed_rx.try_recv() {
-                    active_request_ids.remove(&completed_request_id);
-                }
-                let timeout =
-                    Duration::from_millis(worker_poll_interval_ms.load(Ordering::Relaxed).max(250));
-
-                match command_rx.recv_timeout(timeout) {
-                    Ok(CollectionCommand::UpdateRequest(next_request)) => {
-                        log_debug!(
-                            "collection request updated: request_id={} scope={:?}",
-                            next_request.request_id,
-                            next_request.scope
-                        );
-                        request = next_request;
-                        current_request_id.store(request.request_id, Ordering::Relaxed);
-                        if active_request_ids.insert(request.request_id) {
-                            spawn_collection(
-                                service.clone(),
-                                worker_update_tx.clone(),
-                                completed_tx.clone(),
-                                worker_ctx.clone(),
-                                current_request_id.clone(),
-                                request,
-                            );
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if active_request_ids.insert(request.request_id) {
-                            log_debug!(
-                                "collection poll tick: request_id={} scope={:?}",
-                                request.request_id,
-                                request.scope
-                            );
-                            spawn_collection(
-                                service.clone(),
-                                worker_update_tx.clone(),
-                                completed_tx.clone(),
-                                worker_ctx.clone(),
-                                current_request_id.clone(),
-                                request,
-                            );
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        log_info!("collection worker stopped: command channel disconnected");
-                        break;
-                    }
-                }
-            }
-        });
+        spawn_collection_worker(
+            command_rx,
+            update_tx.clone(),
+            ctx.clone(),
+            poll_interval_ms.clone(),
+            initial_request,
+        );
 
         Self {
             show_all_enabled: false,
@@ -630,72 +546,12 @@ impl AppState {
     }
 }
 
-fn spawn_collection(
-    service: Arc<SnapshotService>,
-    update_tx: mpsc::Sender<AppUpdate>,
-    completed_tx: mpsc::Sender<u64>,
-    ctx: egui::Context,
-    current_request_id: Arc<AtomicU64>,
-    request: CollectionRequest,
-) {
-    thread::spawn(move || {
-        log_debug!(
-            "collect snapshot start: request_id={} scope={:?}",
-            request.request_id,
-            request.scope
-        );
-        let snapshot = service.collect_snapshot(request.scope);
-        let is_current = current_request_id.load(Ordering::Relaxed) == request.request_id;
-        log_debug!(
-            "collect snapshot complete: request_id={} scope={:?} items={} warnings={} is_current={}",
-            request.request_id,
-            request.scope,
-            snapshot.items.len(),
-            snapshot.warnings.len(),
-            is_current
-        );
-
-        if is_current
-            && update_tx
-                .send(AppUpdate::Snapshot(SnapshotUpdate {
-                    request_id: request.request_id,
-                    snapshot,
-                }))
-                .is_ok()
-        {
-            ctx.request_repaint();
-        }
-
-        let _ = completed_tx.send(request.request_id);
-    });
-}
-
-#[cfg(target_os = "windows")]
-fn build_snapshot_service() -> SnapshotService {
-    let runner = Arc::new(StdCommandRunner);
-    SnapshotService::new(
-        Arc::new(NetConnectionPortSource::new(runner.clone())),
-        Arc::new(CimProcessInfoSource::new(runner.clone())),
-        Arc::new(CimParentChainSource::new(runner)),
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn build_snapshot_service() -> SnapshotService {
-    let runner = Arc::new(StdCommandRunner);
-    SnapshotService::new(
-        Arc::new(LsofPortSource::new(runner.clone())),
-        Arc::new(PsProcessInfoSource::new(runner.clone())),
-        Arc::new(PsParentChainSource::new(runner)),
-    )
-}
-
 fn elapsed_since(collected_at: SystemTime, now: SystemTime) -> Duration {
     now.duration_since(collected_at).unwrap_or_default()
 }
 
 fn kill_process_by_pid(pid: u32) -> Result<(), localporter_core::SourceError> {
-    let runner = StdCommandRunner;
+    let runner = StdCommandRunner::default();
     let pid_arg = pid.to_string();
 
     #[cfg(target_os = "windows")]
@@ -759,6 +615,9 @@ fn format_source_error(error: &localporter_core::SourceError) -> String {
             } else {
                 stderr.to_owned()
             }
+        }
+        localporter_core::SourceError::CommandTimedOut { program } => {
+            format!("{program} timed out")
         }
         localporter_core::SourceError::PermissionDenied { program } => {
             format!("permission denied for {program}")
@@ -963,30 +822,6 @@ mod tests {
     }
 
     #[test]
-    fn spawn_collection_skips_stale_snapshots() {
-        let (update_tx, update_rx) = mpsc::channel();
-        let (completed_tx, completed_rx) = mpsc::channel();
-        let current_version = Arc::new(AtomicU64::new(1));
-        let service = Arc::new(build_test_snapshot_service());
-        let ctx = egui::Context::default();
-
-        spawn_collection(
-            service,
-            update_tx,
-            completed_tx,
-            ctx,
-            current_version,
-            CollectionRequest {
-                scope: PortQueryScope::ListenOnly,
-                request_id: 0,
-            },
-        );
-
-        assert_eq!(completed_rx.recv().unwrap(), 0);
-        assert!(update_rx.try_recv().is_err());
-    }
-
-    #[test]
     fn toast_views_drop_expired_items() {
         let (update_tx, update_rx) = mpsc::channel();
         let (command_tx, _command_rx) = mpsc::channel();
@@ -1173,52 +1008,5 @@ mod tests {
     #[test]
     fn browser_url_targets_loopback_http() {
         assert_eq!(browser_url(3000), "http://127.0.0.1:3000");
-    }
-
-    #[cfg(test)]
-    fn build_test_snapshot_service() -> SnapshotService {
-        SnapshotService::new(
-            Arc::new(StaticPortSource),
-            Arc::new(StaticProcessSource),
-            Arc::new(StaticParentSource),
-        )
-    }
-
-    struct StaticPortSource;
-
-    impl localporter_core::sources::BoundPortSource for StaticPortSource {
-        fn collect_bound_ports(
-            &self,
-            _: PortQueryScope,
-        ) -> Result<Vec<localporter_core::ProcessPortBinding>, localporter_core::SourceError>
-        {
-            Ok(Vec::new())
-        }
-    }
-
-    struct StaticProcessSource;
-
-    impl localporter_core::sources::ProcessInfoSource for StaticProcessSource {
-        fn collect_process_info(
-            &self,
-            _: &[u32],
-        ) -> Result<
-            std::collections::HashMap<u32, localporter_core::sources::ProcessInfo>,
-            localporter_core::SourceError,
-        > {
-            Ok(std::collections::HashMap::new())
-        }
-    }
-
-    struct StaticParentSource;
-
-    impl localporter_core::sources::ParentChainSource for StaticParentSource {
-        fn collect_parent_chain(
-            &self,
-            _: u32,
-            _: usize,
-        ) -> Result<Vec<localporter_core::ParentProcess>, localporter_core::SourceError> {
-            Ok(Vec::new())
-        }
     }
 }

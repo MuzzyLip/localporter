@@ -10,6 +10,15 @@ pub struct BottomBarResponse {
     pub quit_clicked: bool,
 }
 
+struct ActionButtonStyle {
+    icon: Option<egui::ImageSource<'static>>,
+    fill: Color32,
+    stroke: Stroke,
+    text_color: Color32,
+    enabled: bool,
+    fixed_height: bool,
+}
+
 impl BottomBar {
     pub const HEIGHT: f32 = 40.0;
     const CONTENT_HEIGHT: f32 = 26.0;
@@ -107,12 +116,14 @@ impl BottomBar {
         self.inline_action_button(
             ui,
             "Settings",
-            None,
-            Color32::TRANSPARENT,
-            Stroke::NONE,
-            Self::SETTINGS_TEXT,
-            true,
-            false,
+            ActionButtonStyle {
+                icon: None,
+                fill: Color32::TRANSPARENT,
+                stroke: Stroke::NONE,
+                text_color: Self::SETTINGS_TEXT,
+                enabled: true,
+                fixed_height: false,
+            },
         )
     }
 
@@ -142,12 +153,14 @@ impl BottomBar {
         self.inline_action_button(
             ui,
             &label,
-            Some(Self::kill_icon_source()),
-            fill,
-            Stroke::new(1.0, stroke),
-            text_color,
-            enabled,
-            true,
+            ActionButtonStyle {
+                icon: Some(Self::kill_icon_source()),
+                fill,
+                stroke: Stroke::new(1.0, stroke),
+                text_color,
+                enabled,
+                fixed_height: true,
+            },
         )
     }
 
@@ -194,13 +207,16 @@ impl BottomBar {
         &self,
         ui: &mut egui::Ui,
         text: &str,
-        icon: Option<egui::ImageSource<'static>>,
-        fill: Color32,
-        stroke: Stroke,
-        text_color: Color32,
-        enabled: bool,
-        fixed_height: bool,
+        style: ActionButtonStyle,
     ) -> egui::Response {
+        let ActionButtonStyle {
+            icon,
+            fill,
+            stroke,
+            text_color,
+            enabled,
+            fixed_height,
+        } = style;
         let galley = ui.painter().layout_no_wrap(
             text.to_owned(),
             egui::FontId::proportional(11.5),
@@ -268,12 +284,14 @@ impl BottomBar {
         self.inline_action_button(
             ui,
             "Quit",
-            None,
-            Self::QUIT_FILL,
-            Stroke::new(1.0, Self::QUIT_STROKE),
-            Self::QUIT_TEXT,
-            true,
-            true,
+            ActionButtonStyle {
+                icon: None,
+                fill: Self::QUIT_FILL,
+                stroke: Stroke::new(1.0, Self::QUIT_STROKE),
+                text_color: Self::QUIT_TEXT,
+                enabled: true,
+                fixed_height: true,
+            },
         )
     }
 }

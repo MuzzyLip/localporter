@@ -1,4 +1,5 @@
 mod app_state;
+mod collection_controller;
 mod settings;
 
 pub use app_state::{AppState, ToastLevel, ToastView};
